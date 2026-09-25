@@ -1,0 +1,1157 @@
+{
+  "name": "VoiceOps · 61 · QA API Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🚪 QA API gateway\nOne POST endpoint `{ token, action, params }` for the dashboard.\nProxies the voice platform (keys stay server-side), starts async analysis jobs, serves job status + score history, runs prompt rewrites, logs deploys and client errors.\nStore = Google Sheets tabs: `jobs`, `scores`, `analyzed_calls`, `prompt_changes`, `client_errors`.",
+        "width": 520,
+        "height": 240,
+        "color": 7
+      },
+      "id": "58fe254d-7b55-57f7-a07e-732d8a6a87f1",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voiceops/qa",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "e0454fd3-2e6c-5362-a2ad-b112316d167f",
+      "name": "QA API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9fe9500a-31be-5fe2-8c69-1bf062802e7c"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c4216775-e7a9-52da-b26b-718cd61e0449",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Single authenticated endpoint. The browser never holds provider API keys.\nconst cfg = $('Load config').first().json.qa;\nconst body = $('QA API').first().json.body ?? {};\nconst ACTIONS = ['list_agents', 'get_agent', 'list_conversations', 'start_analysis', 'job_status',\n                 'scores', 'rewrite_prompt', 'mark_prompt_deployed', 'log_client_error'];\n\nconst safeEq = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && [...a].every((c, i) => c === b[i]);\nif (!cfg.gateway_token || !safeEq(body.token, cfg.gateway_token)) return [{ json: { route: 9, status: 401, error: 'unauthorized' } }];\n\nconst action = body.action;\nconst route = ACTIONS.indexOf(action);\nif (route < 0) return [{ json: { route: 9, status: 400, error: `unknown action \"${action}\"` } }];\n\nconst id = v => (/^[A-Za-z0-9_\\-]{3,100}$/.test(String(v ?? '')) ? String(v) : null);\nconst p = body.params ?? {};\nconst params = {\n  agent_id: id(p.agent_id), job_id: id(p.job_id),\n  days_back: p.days_back, call_limit: p.call_limit, force_reanalyze: p.force_reanalyze === true,\n  conversation_ids: (Array.isArray(p.conversation_ids) ? p.conversation_ids : []).map(id).filter(Boolean).slice(0, 25),\n  current_prompt: typeof p.current_prompt === 'string' ? p.current_prompt.slice(0, 60000) : '',\n  issues: Array.isArray(p.issues) ? p.issues.slice(0, 30) : [],\n  language: typeof p.language === 'string' ? p.language.slice(0, 5) : 'en',\n  note: typeof p.note === 'string' ? p.note.slice(0, 500) : '',\n  error: typeof p.error === 'string' ? p.error.slice(0, 2000) : '',\n};\nconst needsAgent = ['get_agent', 'list_conversations', 'start_analysis', 'mark_prompt_deployed'];\nif (needsAgent.includes(action) && !params.agent_id) return [{ json: { route: 9, status: 400, error: 'agent_id required' } }];\nif (action === 'job_status' && !params.job_id) return [{ json: { route: 9, status: 400, error: 'job_id required' } }];\nreturn [{ json: { route, action, params } }];\n"
+      },
+      "id": "6a680517-a706-518a-835e-777bb94de763",
+      "name": "Route request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 10,
+        "output": "={{ $json.route }}"
+      },
+      "id": "a313d361-23b5-5da2-8e43-119d59704c57",
+      "name": "Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/agents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page_size",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ce3145d6-c2a6-542a-9982-8e55bcc44c3d",
+      "name": "Voice: list agents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        -720
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const agents = ($input.first().json.agents ?? []).map(a => ({ agent_id: a.agent_id, name: a.name }))\n  .sort((a, b) => a.name.localeCompare(b.name));\nreturn [{ json: { agents } }];\n"
+      },
+      "id": "a466646c-eb53-5a68-8a4d-d79dad609283",
+      "name": "Shape agents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -720
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "b47a31f4-d70b-553c-9baa-42892e523395",
+      "name": "Reply agents",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        -720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/agents/{{ $json.params.agent_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "f76b7715-c9b4-5ccd-b820-0d485815458a",
+      "name": "Voice: get agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const a = $input.first().json; const cc = a.conversation_config ?? {};\nreturn [{ json: { agent_id: a.agent_id, name: a.name, language: cc.agent?.language, first_message: cc.agent?.first_message,\n  prompt: cc.agent?.prompt?.prompt ?? '', llm: cc.agent?.prompt?.llm, temperature: cc.agent?.prompt?.temperature,\n  max_tokens: cc.agent?.prompt?.max_tokens } }];\n"
+      },
+      "id": "4d559d93-312d-5fa3-b200-09433c439e07",
+      "name": "Shape agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "5b1a085f-8366-5f1e-8ca3-17c3f16523c0",
+      "name": "Reply agent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/conversations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "agent_id",
+              "value": "={{ $json.params.agent_id }}"
+            },
+            {
+              "name": "page_size",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2d6b4696-24e5-5db1-9e9b-b9b1da245043",
+      "name": "Voice: list conversations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const convs = $input.all().flatMap(i => i.json.conversations ?? []).map(c => ({\n  conversation_id: c.conversation_id, started_unix: c.start_time_unix_secs, duration_secs: c.call_duration_secs,\n  messages: c.message_count, status: c.status, successful: c.call_successful }));\nreturn [{ json: { conversations: convs } }];\n"
+      },
+      "id": "147ec4a1-55eb-59bf-b2dc-ca806603a803",
+      "name": "Shape conversations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "5605332b-2798-50ff-8dae-da4efeae0789",
+      "name": "Reply conversations",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { action, params } = $input.first().json;\nconst job_id = `${action === 'rewrite_prompt' ? 'rw' : 'qa'}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;\nreturn [{ json: { job_id, kind: action, status: 'pending', created_at: DateTime.now().toUTC().toISO(),\n                  params_json: JSON.stringify({ ...params, current_prompt: undefined }), result_json: '' } }];\n"
+      },
+      "id": "da2daad7-530b-52e9-afb9-331726afacce",
+      "name": "New analysis job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "be51d97d-c748-5b21-9403-e6e1066cc8d2",
+      "name": "Save pending job",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ job_id: $('New analysis job').first().json.job_id }) }}",
+        "options": {}
+      },
+      "id": "846859a2-a6fc-58de-bf8d-a4555c748fe1",
+      "name": "Reply job id",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $('New analysis job').first().json;\nconst { params } = $('Route request').first().json;\nreturn [{ json: { job_id: job.job_id, ...params } }];\n"
+      },
+      "id": "c325b7dd-c23b-5f37-97a6-47e447d021d1",
+      "name": "Pipeline input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsQaPipeline00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "75c28966-294c-54eb-84fd-ec7d832c1bb6",
+      "name": "Run QA pipeline",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1780,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "jobs"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "job_id",
+              "lookupValue": "={{ $json.params.job_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "71abdee3-5ed5-5586-a7f3-b926dbad7aba",
+      "name": "Read job",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        900,
+        -80
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.all().map(i => i.json).find(r => r.job_id === $('Route request').first().json.params.job_id);\nif (!row) return [{ json: { status: 'unknown' } }];\nlet result = null;\nif (row.status === 'done') { try { result = JSON.parse(row.result_json); } catch { result = null; } }\nreturn [{ json: { job_id: row.job_id, kind: row.kind, status: row.status, result } }];\n"
+      },
+      "id": "94140b69-af11-5769-8f14-a112525a2036",
+      "name": "Shape status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "98f76629-35a1-54e1-b984-5f53d1399a48",
+      "name": "Reply status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "scores"
+        },
+        "options": {}
+      },
+      "id": "164cb418-441e-5c3f-85b6-3f8cd43ff992",
+      "name": "Read scores",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        900,
+        80
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "prompt_changes"
+        },
+        "options": {}
+      },
+      "id": "fb28aabe-4f53-5eda-ae44-72d195f4b001",
+      "name": "Read prompt changes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        80
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const agent = $('Route request').first().json.params.agent_id;\nconst num = v => (v === '' || v == null ? null : Number(v));\nconst scores = $('Read scores').all().map(i => i.json).filter(r => r.conversation_id && (!agent || r.agent_id === agent))\n  .map(r => ({ analyzed_at: r.analyzed_at, agent_id: r.agent_id, agent_name: r.agent_name, conversation_id: r.conversation_id,\n    score: num(r.score), llm_avg_ms: num(r.llm_avg_ms), tts_avg_ms: num(r.tts_avg_ms), cost_usd: num(r.cost_usd), issues: num(r.issues) }));\nconst changes = $input.all().map(i => i.json).filter(r => r.agent_id && (!agent || r.agent_id === agent));\nreturn [{ json: { scores, prompt_changes: changes } }];\n"
+      },
+      "id": "24cdd31e-14af-5200-858f-448c82de2d84",
+      "name": "Shape history",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "258d693e-b356-503c-bccb-504773fe2904",
+      "name": "Reply history",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { action, params } = $input.first().json;\nconst job_id = `${action === 'rewrite_prompt' ? 'rw' : 'qa'}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;\nreturn [{ json: { job_id, kind: action, status: 'pending', created_at: DateTime.now().toUTC().toISO(),\n                  params_json: JSON.stringify({ ...params, current_prompt: undefined }), result_json: '' } }];\n"
+      },
+      "id": "0cefa362-d2f7-5b7b-87e4-bd1b17581551",
+      "name": "New rewrite job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a66c20e7-4bc6-553f-ae15-0f3d79ab3f31",
+      "name": "Save pending rewrite",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ job_id: $('New rewrite job').first().json.job_id }) }}",
+        "options": {}
+      },
+      "id": "a7ffe242-c116-55f6-aa24-17231f4f5d13",
+      "name": "Reply rewrite id",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apply selected QA findings to the current prompt. Structure-preserving, variable-preserving.\nconst cfg = $('Load config').first().json.qa;\nconst { params } = $('Route request').first().json;\nconst fixes = params.issues.filter(i => i && i.category !== 'settings').map((i, n) =>\n  `${n + 1}. [${i.severity ?? 'issue'}] ${i.root_cause ?? i.evidence ?? ''}\\n   Fix: ${i.fix ?? ''}${i.prompt_patch ? `\\n   Exact text: ${i.prompt_patch}` : ''}`).join('\\n');\nconst system = `You edit system prompts for voice agents. Apply ONLY the listed fixes.\n- Preserve structure, section order, tone and every {{dynamic_variable}} exactly.\n- Do not add new behaviour that no fix asks for. Remove text only if a fix requires it.\n- If the prompt exceeds ~8000 characters, tighten wording without dropping any rule.\n- Write in the prompt's existing language (${params.language}).\nReturn only the full revised prompt. No commentary.`;\nreturn [{ json: { request: { model: cfg.model, max_tokens: 8000, temperature: 0, system,\n  messages: [{ role: 'user', content: `<current_prompt>\\n${params.current_prompt}\\n</current_prompt>\\n\\n<fixes>\\n${fixes || '(none)'}\\n</fixes>` }] } } }];\n"
+      },
+      "id": "a260833b-0bd8-5f73-96ef-9034b29f0300",
+      "name": "Build rewrite request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request }}",
+        "options": {}
+      },
+      "id": "0ab6bdcd-3ed0-5eeb-9383-6cf8fd64dddb",
+      "name": "LLM rewrite",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst text = (res.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('').trim();\nconst job_id = $('New rewrite job').first().json.job_id;\nreturn [{ json: { job_id, status: text ? 'done' : 'error', finished_at: DateTime.now().toUTC().toISO(),\n  result_json: JSON.stringify(text ? { updated_prompt: text } : { error: res.error?.message ?? 'empty response' }).slice(0, 49000) } }];\n"
+      },
+      "id": "b874d403-6e64-5388-bb0d-5ef5d9b6b588",
+      "name": "Rewrite result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "job_id"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "d18cc5b2-fc6a-5960-a39e-171d60ca7d19",
+      "name": "Mark rewrite done",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2220,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { params } = $input.first().json;\nreturn [{ json: { changed_at: DateTime.now().toUTC().toISO(), agent_id: params.agent_id, note: params.note } }];\n"
+      },
+      "id": "5713ec21-34fd-5cf4-86d7-d88f4f06b8a2",
+      "name": "Deploy event row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "prompt_changes"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "09b8a6b4-ad40-5809-89eb-9f3775d0af52",
+      "name": "Append prompt change",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}",
+        "options": {}
+      },
+      "id": "260885ef-bb64-5451-803b-96ed734657a8",
+      "name": "Reply deployed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { params } = $input.first().json;\nreturn [{ json: { at: DateTime.now().toUTC().toISO(), error: params.error } }];\n"
+      },
+      "id": "19d3f8a4-c633-5286-a12b-e2589ab07379",
+      "name": "Client error row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "client_errors"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "19222630-44b5-5f7f-9aa2-4715067441ed",
+      "name": "Append client error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}",
+        "options": {}
+      },
+      "id": "338f79bd-3cfc-54c0-9572-db85f394acc3",
+      "name": "Reply logged",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.error }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "id": "eed658e4-7940-5036-a966-a98c0b340792",
+      "name": "Reply error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        720
+      ]
+    }
+  ],
+  "connections": {
+    "QA API": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Route request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route request": {
+      "main": [
+        [
+          {
+            "node": "Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action": {
+      "main": [
+        [
+          {
+            "node": "Voice: list agents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Voice: get agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Voice: list conversations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "New analysis job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read scores",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "New rewrite job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deploy event row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Client error row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice: list agents": {
+      "main": [
+        [
+          {
+            "node": "Shape agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape agents": {
+      "main": [
+        [
+          {
+            "node": "Reply agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice: get agent": {
+      "main": [
+        [
+          {
+            "node": "Shape agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape agent": {
+      "main": [
+        [
+          {
+            "node": "Reply agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice: list conversations": {
+      "main": [
+        [
+          {
+            "node": "Shape conversations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape conversations": {
+      "main": [
+        [
+          {
+            "node": "Reply conversations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New analysis job": {
+      "main": [
+        [
+          {
+            "node": "Save pending job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save pending job": {
+      "main": [
+        [
+          {
+            "node": "Reply job id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply job id": {
+      "main": [
+        [
+          {
+            "node": "Pipeline input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline input": {
+      "main": [
+        [
+          {
+            "node": "Run QA pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read job": {
+      "main": [
+        [
+          {
+            "node": "Shape status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape status": {
+      "main": [
+        [
+          {
+            "node": "Reply status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read scores": {
+      "main": [
+        [
+          {
+            "node": "Read prompt changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read prompt changes": {
+      "main": [
+        [
+          {
+            "node": "Shape history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape history": {
+      "main": [
+        [
+          {
+            "node": "Reply history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New rewrite job": {
+      "main": [
+        [
+          {
+            "node": "Save pending rewrite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save pending rewrite": {
+      "main": [
+        [
+          {
+            "node": "Reply rewrite id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply rewrite id": {
+      "main": [
+        [
+          {
+            "node": "Build rewrite request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build rewrite request": {
+      "main": [
+        [
+          {
+            "node": "LLM rewrite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM rewrite": {
+      "main": [
+        [
+          {
+            "node": "Rewrite result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rewrite result": {
+      "main": [
+        [
+          {
+            "node": "Mark rewrite done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy event row": {
+      "main": [
+        [
+          {
+            "node": "Append prompt change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append prompt change": {
+      "main": [
+        [
+          {
+            "node": "Reply deployed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client error row": {
+      "main": [
+        [
+          {
+            "node": "Append client error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append client error": {
+      "main": [
+        [
+          {
+            "node": "Reply logged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsQaGateway000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

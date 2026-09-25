@@ -1,0 +1,479 @@
+{
+  "name": "VoiceOps · 40 · Silent-failure Sweeper",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🧹 Silent-failure sweeper\nVoice platforms don't always send a post-call webhook (blocked numbers, carrier rejects).\nAfter the batch **really** finishes (polled, capped), anyone dialled without an activity for this run gets a `Failed` record — nobody disappears from reporting.\nThen decides whether to schedule a retry.",
+        "width": 460,
+        "height": 230,
+        "color": 7
+      },
+      "id": "cbe79891-5cc1-53bb-801d-a5f502abe9ef",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "30e54944-f982-5645-956a-256de86653d8",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "164942f4-977c-5d0a-b8b7-f68190b4016b",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst x = $('Start').first().json;\nreturn [{ json: { ...x, campaign: cfg.campaigns[x.campaign_key], delay: cfg.safety_net.initial_delay_minutes } }];\n"
+      },
+      "id": "1a1fcd61-be26-5f48-bfc2-ae6197843204",
+      "name": "Plan sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.delay }}",
+        "unit": "minutes"
+      },
+      "id": "6ceabc1f-5522-5d68-a5de-88eb69ab9bf2",
+      "name": "Initial delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "webhookId": "a28a09e9-12d9-5851-b12c-d618fe965255"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/batch-calling/{{ $('Plan sweep').first().json.batch_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "209153f6-4205-56cc-96ed-5dd3ce69ab37",
+      "name": "Get batch status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wait for the batch to actually finish dialling instead of trusting a fixed timer.\nconst cfg = $('Load config').first().json.safety_net;\nconst status = String($input.first().json.status ?? 'unknown').toLowerCase();\nconst finished = ['completed', 'failed', 'cancelled'].includes(status);\nconst exhausted = $runIndex >= cfg.max_polls;\nreturn [{ json: { status, finished: finished || exhausted, forced: !finished && exhausted, polls: $runIndex + 1 } }];\n"
+      },
+      "id": "5eed15ab-f077-5b56-9835-1176a59dd607",
+      "name": "Batch finished?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9f7b8ea7-90eb-5366-b0aa-a140e85a0c21",
+              "leftValue": "={{ $json.finished }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "84b134d3-bfca-5388-b2e2-82d3f4271649",
+      "name": "Finished",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Load config').first().json.safety_net.poll_every_minutes }}",
+        "unit": "minutes"
+      },
+      "id": "eccc6276-3908-5a78-975e-a7e1e516b71e",
+      "name": "Poll again",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        220
+      ],
+      "webhookId": "2d0924f3-4881-535b-aed3-54679b147ac8"
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Load config').first().json.safety_net.grace_minutes }}",
+        "unit": "minutes"
+      },
+      "id": "bc6961d4-37b5-5985-835f-f5118ea845d5",
+      "name": "Grace period",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        -20
+      ],
+      "webhookId": "a5e7c586-4feb-521d-a294-57eab36a4d77"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { op: 'search_activities', payload: { run_name: $('Plan sweep').first().json.run_name } } }];\n"
+      },
+      "id": "63e68c01-32cf-523c-99e2-4b646d58ec6f",
+      "name": "Search this run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "bcd3cc5c-b5a5-508b-80b2-75e6e0e9a978",
+      "name": "Fetch logged activities",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Everyone we dialled in THIS run who has no activity for THIS run is a silent failure\n// (blocked number, carrier reject, webhook never sent…). Scope by run — a call record\n// from another campaign must not hide a failure in this one.\nconst plan = $('Plan sweep').first().json;\nconst logged = new Set(($input.first().json.activities ?? [])\n  .filter(a => a.run_name === plan.run_name).map(a => String(a.contact_id)));\nconst missing = plan.recipients.filter(r => !logged.has(String(r.id)));\nreturn [{ json: { run_name: plan.run_name, dialled: plan.recipients.length, logged: logged.size, missing } }];\n"
+      },
+      "id": "9edfc838-d458-5ad4-b5e7-97d924e85cb0",
+      "name": "Find silent failures",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $('Plan sweep').first().json;\nconst cfg = $('Load config').first().json;\nconst { missing } = $input.first().json;\nconst label = cfg.defaults.outcome_labels.failed;\nconst note = `AI call outcome: ${label}\\n\\nSummary: no post-call event received from the voice platform (batch ${plan.batch_id}).`;\nreturn missing.map(r => ({ json: { op: 'log_activity', payload: {\n  contact_id: r.id, campaign_key: plan.campaign_key, run_name: plan.run_name,\n  outcome_label: label, summary: 'No post-call event received', note,\n  started_at: DateTime.now().minus({ minutes: plan.delay }).toUTC().toISO({ suppressMilliseconds: true }), duration_secs: 0,\n} } }));\n"
+      },
+      "id": "f6b1135a-ef26-5b4a-84d7-299d57c25f45",
+      "name": "Build failure records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "76c956f4-298d-5a8f-8b13-461c4bd5fb98",
+      "name": "Write failure records",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2640,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $('Plan sweep').first().json;\nconst r = plan.campaign.retry;\nif (!r?.enabled || plan.attempt > (r.max_retries ?? 1)) return [];\nreturn [{ json: { campaign_key: plan.campaign_key, run_name: plan.run_name, attempt: plan.attempt, recipients: plan.recipients } }];\n"
+      },
+      "id": "8b36f480-160c-5ccd-a3f3-627afb3bd383",
+      "name": "Retry decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsRetry0000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "8f220838-cbb6-567e-8721-6533d28f2f61",
+      "name": "Schedule retry",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2640,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Plan sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan sweep": {
+      "main": [
+        [
+          {
+            "node": "Initial delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initial delay": {
+      "main": [
+        [
+          {
+            "node": "Get batch status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get batch status": {
+      "main": [
+        [
+          {
+            "node": "Batch finished?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch finished?": {
+      "main": [
+        [
+          {
+            "node": "Finished",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finished": {
+      "main": [
+        [
+          {
+            "node": "Grace period",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Poll again",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll again": {
+      "main": [
+        [
+          {
+            "node": "Get batch status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grace period": {
+      "main": [
+        [
+          {
+            "node": "Search this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search this run": {
+      "main": [
+        [
+          {
+            "node": "Fetch logged activities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch logged activities": {
+      "main": [
+        [
+          {
+            "node": "Find silent failures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find silent failures": {
+      "main": [
+        [
+          {
+            "node": "Build failure records",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Retry decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build failure records": {
+      "main": [
+        [
+          {
+            "node": "Write failure records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry decision": {
+      "main": [
+        [
+          {
+            "node": "Schedule retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsSweeper00000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

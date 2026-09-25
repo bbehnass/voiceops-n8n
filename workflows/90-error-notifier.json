@@ -1,0 +1,82 @@
+{
+  "name": "VoiceOps · 90 · Error Notifier",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d6a66746-3efd-581e-b84e-ea90c3cec3ab",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst url = (() => { try { return $env.ALERT_WEBHOOK_URL || ''; } catch { return ''; } })();\nif (!url) return [];\nconst wf = e.workflow?.name ?? 'unknown workflow';\nconst node = e.execution?.lastNodeExecuted ?? '?';\nconst msg = e.execution?.error?.message ?? 'Unknown error';\nreturn [{ json: { url, payload: { text: `:rotating_light: *${wf}* failed at *${node}*\\n>${msg}\\n${e.execution?.url ?? ''}` } } }];\n"
+      },
+      "id": "48068268-c649-5398-9cb1-50293ccb4611",
+      "name": "Format alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.payload }}",
+        "options": {}
+      },
+      "id": "c4863bb4-a5eb-5d51-8d05-dfbafca0a190",
+      "name": "Send alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Send alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsErrorNotify0",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

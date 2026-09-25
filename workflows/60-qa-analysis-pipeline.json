@@ -1,0 +1,702 @@
+{
+  "name": "VoiceOps · 60 · QA Analysis Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔬 QA analysis pipeline (async job)\nStarted by the gateway with a `job_id`.\nList calls → keep the ones worth reviewing → skip already analyzed → anonymize → LLM review against a weighted rubric (**JSON output, cached rubric**) → cluster recurring issues → store scores + job result.",
+        "width": 480,
+        "height": 220,
+        "color": 7
+      },
+      "id": "f3282577-bd2e-508e-892d-b8880cddf421",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ad24fd26-e218-59d9-840b-39f395798aac",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "d2dd931a-e993-5292-8e22-2b49f1180a29",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $('Start').first().json;\nconst toInt = (v, d, max) => Math.min(Math.max(parseInt(v, 10) || d, 1), max);\nreturn [{ json: {\n  job_id: j.job_id,\n  agent_id: j.agent_id,\n  days_back: toInt(j.days_back, 7, 90),\n  call_limit: toInt(j.call_limit, 5, 25),\n  conversation_ids: Array.isArray(j.conversation_ids) ? j.conversation_ids : [],\n  force_reanalyze: j.force_reanalyze === true,\n  after_unix: Math.floor(Date.now() / 1000) - toInt(j.days_back, 7, 90) * 86400,\n} }];\n"
+      },
+      "id": "8b89025e-37aa-55d6-816f-0666229945fe",
+      "name": "Load job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/conversations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "agent_id",
+              "value": "={{ $json.agent_id }}"
+            },
+            {
+              "name": "page_size",
+              "value": "100"
+            },
+            {
+              "name": "call_start_after_unix",
+              "value": "={{ $json.after_unix }}"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "cursor",
+                    "value": "={{ $response.body.next_cursor }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.has_more }}",
+              "limitPagesFetched": true,
+              "maxRequests": 10
+            }
+          }
+        }
+      },
+      "id": "1617320f-864f-59ad-9ddd-561001d7b8ac",
+      "name": "List conversations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "analyzed_calls"
+        },
+        "options": {}
+      },
+      "id": "956759cf-e47d-52b6-a5d3-caf61d13683d",
+      "name": "Read analyzed calls",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only analyze calls that can teach us something: finished, long enough, real back-and-forth, not voicemail.\nconst job = $('Load job').first().json;\nconst f = $('Load config').first().json.qa.filters;\nconst all = $('List conversations').all().flatMap(i => i.json.conversations ?? []);\nconst done = new Set($('Read analyzed calls').all().map(i => i.json.conversation_id).filter(Boolean));\n\nlet pool = job.conversation_ids.length\n  ? all.filter(c => job.conversation_ids.includes(c.conversation_id))\n  : all.filter(c => c.status === 'done'\n      && (c.call_duration_secs ?? 0) >= f.min_duration_secs\n      && (c.message_count ?? 0) >= f.min_messages\n      && !/voicemail|silence/i.test(c.termination_reason ?? ''));\nif (!job.force_reanalyze) pool = pool.filter(c => !done.has(c.conversation_id));\n\nconst picked = pool.sort((a, b) => (b.start_time_unix_secs ?? 0) - (a.start_time_unix_secs ?? 0)).slice(0, job.call_limit);\nif (!picked.length) return [{ json: { empty: true } }];\nreturn picked.map(c => ({ json: { conversation_id: c.conversation_id, agent_id: c.agent_id, agent_name: c.agent_name } }));\n"
+      },
+      "id": "71f496e4-652b-5d60-9554-18541be7c1a6",
+      "name": "Select calls",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a88d9967-af34-5afc-b9ac-ae183c1b1719",
+              "leftValue": "={{ $json.empty }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "cacc752a-ba98-52d2-8e1c-6c6b1e6b2366",
+      "name": "Anything to analyze?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/agents/{{ $('Load job').first().json.agent_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "5223e56f-adfe-5e66-9a11-b93478a9bc69",
+      "name": "Get agent config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -100
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Select calls').all();\n"
+      },
+      "id": "17491569-3028-50c7-ac4f-dd3500d8fdb9",
+      "name": "Restore selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/conversations/{{ $json.conversation_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "9efa5249-26af-5409-ba51-762ea3b08b5c",
+      "name": "Get conversation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build one evaluation request per call: anonymized transcript + latency stats + agent config snapshot.\nconst cfg = $('Load config').first().json.qa;\nconst agent = $('Get agent config').first().json;\nconst conv = $json;\nconst RUBRIC = `You are a senior QA reviewer for outbound AI voice agents. You review one real call at a time against the agent's own instructions and configuration.\n\nRules:\n- Judge only what is in the transcript and configuration. Never invent problems. If the call went well, say so and return few or no issues.\n- Every issue must cite evidence as a timestamp (e.g. \"at 00:42\") plus a short paraphrase of what happened.\n- Separate the cause: \"prompt\" (instructions), \"settings\" (turn-taking, interruptions, LLM/TTS/ASR config), \"knowledge\" (missing or wrong facts), \"tooling\" (tools, variables, integrations).\n- Fixes must be directly applicable: for prompt issues give the exact text to add or replace; for settings give the setting path and the recommended value.\n- Group your test scenarios so one scripted test call can verify several fixes. Maximum 3 scenarios.\n- Write every human-readable field in the language given in <language>.\n\nScore each dimension 0-10:\n- goal_completion (weight 30): did the call achieve its stated goal, or correctly conclude it could not?\n- flow (weight 20): natural turn-taking, no loops, no repeated questions, handles interruptions.\n- accuracy (weight 20): correct facts, respects guardrails, no hallucinated promises, uses variables correctly.\n- tone (weight 15): clear, concise, adapted to a caller who may be a non-native speaker.\n- technical (weight 15): latency, dead air, talk-over, recognition errors.\n\nReturn ONLY a JSON object, no prose, no code fences, with this shape:\n{\n  \"scores\": { \"goal_completion\": 0, \"flow\": 0, \"accuracy\": 0, \"tone\": 0, \"technical\": 0 },\n  \"overall\": 0,\n  \"verdict\": \"one sentence\",\n  \"strengths\": [\"...\"],\n  \"issues\": [\n    { \"severity\": \"critical|major|minor\", \"category\": \"prompt|settings|knowledge|tooling\",\n      \"evidence\": \"at mm:ss — ...\", \"root_cause\": \"...\", \"fix\": \"...\",\n      \"prompt_patch\": \"exact text or null\", \"setting_change\": { \"path\": \"...\", \"recommended\": \"...\" } }\n  ],\n  \"test_scenarios\": [ { \"goal\": \"...\", \"caller_script\": \"...\", \"pass_criteria\": [\"...\"], \"covers\": [0] } ]\n}\n\"overall\" is the weighted score on 0-100.`;\n\n// ── GDPR: remove personal data before it leaves our infrastructure ──\nconst dv = conv.conversation_initiation_client_data?.dynamic_variables ?? {};\nconst known = [dv.contact_name, ...(String(dv.contact_name ?? '').split(/\\s+/))].filter(s => s && s.length > 2);\nconst esc = s => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\nfunction anonymize(t) {\n  let out = String(t ?? '');\n  for (const n of known) out = out.replace(new RegExp(`\\\\b${esc(n)}\\\\b`, 'gi'), '[NAME]');\n  return out\n    .replace(/[\\w.+-]+@[\\w-]+\\.[\\w.]+/g, '[EMAIL]')\n    .replace(/\\+?\\d[\\d\\s().-]{7,}\\d/g, '[PHONE]')\n    .replace(/\\b[A-Z]{1,2}\\d[A-Z\\d]?\\s?\\d[A-Z]{2}\\b/gi, '[POSTCODE]')\n    .replace(/\\b\\d{1,4}\\s+\\w+\\s+(street|st|road|rd|avenue|ave|lane|rue|boulevard|bd)\\b/gi, '[ADDRESS]');\n}\n\nconst turns = conv.transcript ?? [];\nconst mmss = s => `${String(Math.floor((s ?? 0) / 60)).padStart(2, '0')}:${String(Math.floor((s ?? 0) % 60)).padStart(2, '0')}`;\nconst transcript = turns.filter(t => t.message)\n  .map(t => `[${mmss(t.time_in_call_secs)}] ${t.role === 'agent' ? 'AGENT' : 'CALLER'}: ${anonymize(t.message)}`).join('\\n');\n\n// ── Latency per turn (ms) ──\nconst series = { llm: [], tts: [], asr: [] };\nfor (const t of turns) {\n  const m = t.conversation_turn_metrics?.metrics ?? {};\n  if (m.convai_llm_service_ttfb?.elapsed_time) series.llm.push(m.convai_llm_service_ttfb.elapsed_time * 1000);\n  if (m.convai_tts_service_ttfb?.elapsed_time) series.tts.push(m.convai_tts_service_ttfb.elapsed_time * 1000);\n  if (m.convai_asr_trailing_service_latency?.elapsed_time) series.asr.push(m.convai_asr_trailing_service_latency.elapsed_time * 1000);\n}\nconst avg = a => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);\nconst p90 = a => (a.length ? Math.round([...a].sort((x, y) => x - y)[Math.floor(a.length * 0.9)] ?? a[a.length - 1]) : null);\nconst latency = { llm_avg: avg(series.llm), llm_p90: p90(series.llm), tts_avg: avg(series.tts), asr_avg: avg(series.asr),\n                  slow_llm_turns: series.llm.filter(v => v > 1500).length, llm_turns: series.llm.length };\n\n// ── Config snapshot (only what matters for behaviour) ──\nconst cc = agent.conversation_config ?? {};\nconst prompt = cc.agent?.prompt ?? {};\nconst snapshot = {\n  llm: prompt.llm, temperature: prompt.temperature, max_tokens: prompt.max_tokens,\n  tools: (prompt.tools ?? []).map(t => t.name), knowledge_base_docs: (prompt.knowledge_base ?? []).length,\n  turn: cc.turn ?? {}, tts: { model_id: cc.tts?.model_id, stability: cc.tts?.stability, speed: cc.tts?.speed },\n  language: cc.agent?.language, first_message: cc.agent?.first_message,\n};\nconst language = cc.agent?.language || 'en';\n\nconst data = `<language>${language}</language>\n<agent_name>${agent.name ?? ''}</agent_name>\n<system_prompt>\n${prompt.prompt ?? '(unavailable)'}\n</system_prompt>\n<configuration>${JSON.stringify(snapshot)}</configuration>\n<latency_ms>${JSON.stringify(latency)}</latency_ms>\n<call duration_secs=\"${conv.metadata?.call_duration_secs ?? 0}\" termination=\"${conv.metadata?.termination_reason ?? ''}\">\n${transcript || '(empty transcript)'}\n</call>`;\n\nreturn { json: {\n  conversation_id: conv.conversation_id, agent_id: conv.agent_id, agent_name: agent.name ?? conv.agent_name ?? '',\n  duration_secs: conv.metadata?.call_duration_secs ?? 0, started_unix: conv.metadata?.start_time_unix_secs ?? null,\n  latency, transcript,\n  request: {\n    model: cfg.model, max_tokens: cfg.max_tokens, temperature: 0,\n    system: [{ type: 'text', text: RUBRIC, cache_control: { type: 'ephemeral' } }],   // rubric cached across calls\n    messages: [{ role: 'user', content: data }],\n  },\n} };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "4178449f-b4a5-58dc-9aec-071b3fe9802e",
+      "name": "Prepare evaluation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "id": "48ecab27-04d5-5688-be06-7afde35906e0",
+      "name": "LLM review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        -100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Structured JSON in, structured JSON out — no regex scraping of free text.\nconst cfg = $('Load config').first().json.qa;\nconst meta = $('Prepare evaluation').item.json;\nconst res = $json;\nconst text = (res.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('').trim();\n\nlet evaluation = null, parse_error = null;\ntry {\n  const start = text.indexOf('{'), end = text.lastIndexOf('}');\n  evaluation = JSON.parse(text.slice(start, end + 1));\n} catch (e) { parse_error = res.error?.message ?? `unparseable model output (${e.message})`; }\n\nconst W = { goal_completion: 30, flow: 20, accuracy: 20, tone: 15, technical: 15 };\nif (evaluation && typeof evaluation.overall !== 'number' && evaluation.scores) {\n  evaluation.overall = Math.round(Object.entries(W).reduce((s, [k, w]) => s + (Number(evaluation.scores[k]) || 0) * w, 0) / 10);\n}\n\nconst u = res.usage ?? {}; const p = cfg.price_per_mtok;\nconst cost = [p.input, p.output, p.cache_read, p.cache_write].every(v => typeof v === 'number')\n  ? ((u.input_tokens ?? 0) * p.input + (u.output_tokens ?? 0) * p.output +\n     (u.cache_read_input_tokens ?? 0) * p.cache_read + (u.cache_creation_input_tokens ?? 0) * p.cache_write) / 1e6\n  : null;\n\nconst { request, ...rest } = meta;\nreturn { json: { ...rest, evaluation, parse_error, truncated: res.stop_reason === 'max_tokens',\n                 usage: u, cost_usd: cost === null ? null : Math.round(cost * 10000) / 10000 } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "582910b4-d550-5efd-b2fb-569ed752c374",
+      "name": "Parse evaluation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Roll per-call evaluations into a job result the dashboard can render.\nconst job = $('Load job').first().json;\nconst calls = $input.all().map(i => i.json);\nconst ok = calls.filter(c => c.evaluation);\nconst mean = a => (a.length ? Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10 : null);\n\n// Cluster recurring issues across calls (category + normalized fix fingerprint).\nconst fp = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9àâçéèêëîïôûùüÿñæœ ]/g, '').split(/\\s+/).filter(w => w.length > 3).slice(0, 6).join(' ');\nconst clusters = {};\nok.forEach(c => (c.evaluation.issues ?? []).forEach(iss => {\n  const key = `${iss.category}|${fp(iss.fix)}`;\n  (clusters[key] ??= { ...iss, occurrences: 0, conversation_ids: [] });\n  clusters[key].occurrences++; clusters[key].conversation_ids.push(c.conversation_id);\n}));\nconst rank = { critical: 0, major: 1, minor: 2 };\nconst recurring = Object.values(clusters).sort((a, b) => b.occurrences - a.occurrences || (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));\n\nconst summary = {\n  agent_id: job.agent_id, agent_name: ok[0]?.agent_name ?? calls[0]?.agent_name ?? '',\n  calls_analyzed: ok.length, calls_failed: calls.length - ok.length,\n  average_score: mean(ok.map(c => c.evaluation.overall)),\n  dimension_averages: Object.fromEntries(['goal_completion', 'flow', 'accuracy', 'tone', 'technical']\n    .map(k => [k, mean(ok.map(c => Number(c.evaluation.scores?.[k])).filter(Number.isFinite))])),\n  latency_ms: { llm_avg: mean(ok.map(c => c.latency.llm_avg).filter(Boolean)), tts_avg: mean(ok.map(c => c.latency.tts_avg).filter(Boolean)) },\n  total_cost_usd: ok.some(c => c.cost_usd !== null) ? Math.round(ok.reduce((s, c) => s + (c.cost_usd ?? 0), 0) * 10000) / 10000 : null,\n};\nconst result = { summary, recurring_issues: recurring, calls: calls.map(c => ({ ...c, transcript: c.transcript?.slice(0, 6000) })) };\nreturn [{ json: { job_id: job.job_id, result, analyzed_at: DateTime.now().toUTC().toISO() } }];\n"
+      },
+      "id": "cb6bdbc1-b7f9-52bb-ae77-863dfe6ce3cc",
+      "name": "Aggregate job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { result, analyzed_at } = $input.first().json;\nreturn result.calls.filter(c => c.evaluation).map(c => ({ json: {\n  analyzed_at, agent_id: c.agent_id, agent_name: c.agent_name, conversation_id: c.conversation_id,\n  score: c.evaluation.overall, goal_completion: c.evaluation.scores?.goal_completion, flow: c.evaluation.scores?.flow,\n  accuracy: c.evaluation.scores?.accuracy, tone: c.evaluation.scores?.tone, technical: c.evaluation.scores?.technical,\n  duration_secs: c.duration_secs, llm_avg_ms: c.latency.llm_avg, tts_avg_ms: c.latency.tts_avg, asr_avg_ms: c.latency.asr_avg,\n  issues: (c.evaluation.issues ?? []).length, cost_usd: c.cost_usd,\n} }));\n"
+      },
+      "id": "be16f9db-6c2a-51f1-9060-e76805d1d80b",
+      "name": "Score rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "scores"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "8e2789ed-1b6d-5c7b-9e9e-6a189afcf451",
+      "name": "Append scores",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3300,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { result, analyzed_at } = $input.first().json;\nreturn result.calls.filter(c => c.evaluation).map(c => ({ json: { conversation_id: c.conversation_id, agent_id: c.agent_id, analyzed_at } }));\n"
+      },
+      "id": "8f5dcd55-05ea-5515-a430-dd25cfa64640",
+      "name": "Analyzed rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "analyzed_calls"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "790930bf-ba06-5cb7-bc6b-ccbfc891c6bf",
+      "name": "Append analyzed ids",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3300,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Google Sheets cells cap at 50k chars: shed transcripts first if the result is too big.\nconst { job_id, result } = $input.first().json;\nlet payload = JSON.stringify(result);\nif (payload.length > 48000) { result.calls.forEach(c => { c.transcript = ''; }); payload = JSON.stringify(result); }\nif (payload.length > 48000) { result.calls = result.calls.map(({ evaluation, ...c }) => ({ ...c, evaluation: evaluation && { overall: evaluation.overall, verdict: evaluation.verdict } })); payload = JSON.stringify(result); }\nreturn [{ json: { job_id, status: 'done', finished_at: DateTime.now().toUTC().toISO(), result_json: payload } }];\n"
+      },
+      "id": "47f82fe9-ff16-5983-a7f4-99ebe3526370",
+      "name": "Job result row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $('Load job').first().json;\nreturn [{ json: { job_id: job.job_id, status: 'done', finished_at: DateTime.now().toUTC().toISO(),\n  result_json: JSON.stringify({ summary: { calls_analyzed: 0, message: 'No new qualifying calls in this window' }, recurring_issues: [], calls: [] }) } }];\n"
+      },
+      "id": "ea1506b1-522c-5e4e-9a8d-532290861b01",
+      "name": "Empty result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Load config').first().json.qa.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "jobs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "job_id"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "fb48522f-42b3-574a-aec3-2fea76007ea4",
+      "name": "Mark job done",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3300,
+        60
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Load job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load job": {
+      "main": [
+        [
+          {
+            "node": "List conversations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List conversations": {
+      "main": [
+        [
+          {
+            "node": "Read analyzed calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read analyzed calls": {
+      "main": [
+        [
+          {
+            "node": "Select calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select calls": {
+      "main": [
+        [
+          {
+            "node": "Anything to analyze?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything to analyze?": {
+      "main": [
+        [
+          {
+            "node": "Get agent config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Empty result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get agent config": {
+      "main": [
+        [
+          {
+            "node": "Restore selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore selection": {
+      "main": [
+        [
+          {
+            "node": "Get conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get conversation": {
+      "main": [
+        [
+          {
+            "node": "Prepare evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare evaluation": {
+      "main": [
+        [
+          {
+            "node": "LLM review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM review": {
+      "main": [
+        [
+          {
+            "node": "Parse evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse evaluation": {
+      "main": [
+        [
+          {
+            "node": "Aggregate job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate job": {
+      "main": [
+        [
+          {
+            "node": "Score rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Analyzed rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Job result row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score rows": {
+      "main": [
+        [
+          {
+            "node": "Append scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyzed rows": {
+      "main": [
+        [
+          {
+            "node": "Append analyzed ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job result row": {
+      "main": [
+        [
+          {
+            "node": "Mark job done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Empty result": {
+      "main": [
+        [
+          {
+            "node": "Mark job done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsQaPipeline00",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

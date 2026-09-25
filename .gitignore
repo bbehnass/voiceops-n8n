@@ -1,0 +1,5 @@
+.env
+*.local.json
+id-map.json
+node_modules/
+.DS_Store

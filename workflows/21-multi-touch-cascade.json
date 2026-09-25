@@ -1,0 +1,272 @@
+{
+  "name": "VoiceOps · 21 · Multi-touch Cascade",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔁 Multi-touch cascade\nOne trigger → N calls spread over days (e.g. D0 / D3 / D7), weekend-aware.\nThe loop is data-driven (config `cascade.touch_offsets_days`) instead of copy-pasting a block per day.\nEvery touch goes through the dispatcher, so eligibility is re-checked each time.",
+        "width": 460,
+        "height": 220,
+        "color": 7
+      },
+      "id": "59872da4-f74f-5636-8a34-7938b6301ded",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voiceops/campaigns/cascade",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "599276d9-2ed2-5ceb-a925-1b7b91e22dab",
+      "name": "CRM trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "fe684510-153f-53d8-8a91-a234f129074b"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body ?? $input.first().json;\nif (!b.campaign_key || !Array.isArray(b.recipients)) throw new Error('campaign_key and recipients[] are required');\nconst date = DateTime.now().toISODate();\nreturn [{ json: { campaign_key: b.campaign_key, recipients: b.recipients, cascade_id: `${b.campaign_key}-${date}` } }];\n"
+      },
+      "id": "15a1f1c3-2558-51c2-ada7-86809f3ff8b5",
+      "name": "Normalize request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "bc160a46-adcd-5ab6-add4-031f856ac9d2",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turn \"day 0 / 3 / 7\" into concrete send times, pushed off weekends, in the campaign's timezone.\nconst cfg = $('Load config').first().json;\nconst req = $('Normalize request').first().json;\nconst c = cfg.campaigns[req.campaign_key];\nif (!c?.cascade) throw new Error(`Campaign \"${req.campaign_key}\" has no cascade config`);\nconst { touch_offsets_days, skip_weekends = true, send_hour = 11 } = c.cascade;\n\nconst start = DateTime.now().setZone(c.timezone);\nreturn touch_offsets_days.map((offset, i) => {\n  let at = offset === 0 ? start : start.plus({ days: offset }).set({ hour: send_hour, minute: 0, second: 0 });\n  if (skip_weekends) while (at.weekday > 5) at = at.plus({ days: 1 });\n  return { json: { touch: i + 1, touch_label: `Touch ${i + 1}`, send_at: at.toUTC().toISO(), campaign_key: req.campaign_key } };\n});\n"
+      },
+      "id": "2665601e-b349-5696-8392-caac415cb82b",
+      "name": "Plan touches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "c2adcd58-a6e9-54c2-b894-783e8a050bc9",
+      "name": "For each touch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ $json.send_at }}"
+      },
+      "id": "deca058c-ec52-53c4-a03c-cc267965cdfe",
+      "name": "Wait until send time",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        100
+      ],
+      "webhookId": "44570de4-368e-5496-9d0c-a0e1ff7a0714"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Each touch re-enters the dispatcher, which re-checks eligibility live —\n// people who fixed their situation since the last touch drop out automatically.\nconst req = $('Normalize request').first().json;\nconst cfg = $('Load config').first().json;\nconst label = cfg.campaigns[req.campaign_key].label;\nconst date = DateTime.now().setZone(cfg.campaigns[req.campaign_key].timezone).toISODate();\nreturn [{ json: { campaign_key: req.campaign_key, run_name: `${label} ${date}`, touch_label: $input.first().json.touch_label, recipients: req.recipients } }];\n"
+      },
+      "id": "34850920-85ef-5e22-9ccb-ac923c06b88f",
+      "name": "Touch payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsDispatcher00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "183a2fb6-fabf-57eb-bacc-afcec0ccaed0",
+      "name": "Dispatch touch",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {},
+      "id": "ca06b8ae-13fd-5086-9280-894120cb5996",
+      "name": "Cascade finished",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        -120
+      ]
+    }
+  ],
+  "connections": {
+    "CRM trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize request": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Plan touches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan touches": {
+      "main": [
+        [
+          {
+            "node": "For each touch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For each touch": {
+      "main": [
+        [
+          {
+            "node": "Cascade finished",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait until send time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait until send time": {
+      "main": [
+        [
+          {
+            "node": "Touch payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Touch payload": {
+      "main": [
+        [
+          {
+            "node": "Dispatch touch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch touch": {
+      "main": [
+        [
+          {
+            "node": "For each touch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsCascade00000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

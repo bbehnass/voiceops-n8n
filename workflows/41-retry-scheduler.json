@@ -1,0 +1,246 @@
+{
+  "name": "VoiceOps · 41 · Retry Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ↩️ Retry scheduler\nWaits `retry.delay_minutes`, reads this run's outcomes from the CRM, and re-dispatches only people whose latest attempt was voicemail / no answer / failed.\nBounded by `retry.max_retries`. Goes back through the dispatcher, so eligibility is re-checked.",
+        "width": 440,
+        "height": 210,
+        "color": 7
+      },
+      "id": "f313282c-58df-5e6a-b4cc-8cd1bf2ba19d",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -330
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ad7d3709-ad7d-5061-817f-2618c1483ac0",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "bc05a9e3-afb7-5f23-9976-e0afc7776757",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst x = $('Start').first().json;\nconst c = cfg.campaigns[x.campaign_key];\nreturn [{ json: { ...x, campaign: c, base_run_name: x.run_name.replace(/ \\(Retry \\d+\\)$/, ''), delay: c.retry.delay_minutes ?? 180 } }];\n"
+      },
+      "id": "557079c8-fffc-541e-8ad2-a9974b8cda8b",
+      "name": "Plan retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.delay }}",
+        "unit": "minutes"
+      },
+      "id": "f23d5fa9-1804-5252-be27-cdb0ff27dbf9",
+      "name": "Retry delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "webhookId": "08d99eb1-035b-51a5-8af4-1091318bf118"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { op: 'search_activities', payload: { run_name: $('Plan retry').first().json.run_name } } }];\n"
+      },
+      "id": "1e810e2a-2d39-592c-8484-15456cc7617b",
+      "name": "Search this run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "71651486-b3f4-5625-9f19-d57afb891c45",
+      "name": "Fetch outcomes",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Retry only people whose LATEST attempt in this run ended in a retryable outcome.\nconst plan = $('Plan retry').first().json;\nconst retryable = new Set(plan.campaign.retry.retry_on.map(s => s.toLowerCase()));\nconst latest = new Map();\nfor (const a of $input.first().json.activities ?? []) {\n  if (a.run_name !== plan.run_name) continue;\n  const prev = latest.get(String(a.contact_id));\n  if (!prev || String(a.started_at ?? '') > String(prev.started_at ?? '')) latest.set(String(a.contact_id), a);\n}\nconst ids = new Set([...latest.entries()].filter(([, a]) => retryable.has(String(a.outcome ?? '').toLowerCase())).map(([id]) => id));\nconst recipients = plan.recipients.filter(r => ids.has(String(r.id)));\nif (!recipients.length) return [];\nreturn [{ json: {\n  campaign_key: plan.campaign_key,\n  run_name: `${plan.base_run_name} (Retry ${plan.attempt})`,\n  attempt: plan.attempt + 1,\n  skip_ab: true,                 // arms were assigned on the first attempt\n  recipients,                    // eligibility is re-checked again by the dispatcher\n} }];\n"
+      },
+      "id": "d1ed560e-bd62-579f-8216-a748be947f91",
+      "name": "Select retry recipients",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsDispatcher00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "352bf07f-cd1a-5457-8248-1ea4d5ceaf74",
+      "name": "Dispatch retry",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Plan retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan retry": {
+      "main": [
+        [
+          {
+            "node": "Retry delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry delay": {
+      "main": [
+        [
+          {
+            "node": "Search this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search this run": {
+      "main": [
+        [
+          {
+            "node": "Fetch outcomes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch outcomes": {
+      "main": [
+        [
+          {
+            "node": "Select retry recipients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select retry recipients": {
+      "main": [
+        [
+          {
+            "node": "Dispatch retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsRetry0000000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

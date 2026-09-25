@@ -1,0 +1,396 @@
+{
+  "name": "VoiceOps · 10 · CRM Adapter",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔌 CRM adapter\nThe **only** workflow that knows which CRM you use. Callers send `{ op, payload }` items; this returns canonical results in the same order.\n\nShips with **Zoho CRM** and **HubSpot** mappings plus a `generic` REST contract.\nTo support another CRM: add a branch in *Build request* + the matching normalizer. Nothing else changes.\n\n⚠️ Pick the right credential on the HTTP nodes: OAuth2 for Zoho/Salesforce, Header Auth (`Authorization: Bearer …`) for HubSpot private apps.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "id": "5eb34586-8007-50a1-9995-950285f47f29",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "fbd37623-e9bd-5f98-a77e-c61211ba779d",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "69d3198a-1906-5c02-9add-8a6ad6502da3",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Translates provider-agnostic operations into concrete HTTP requests.\n// Supported ops: noop | get_record | update_record | log_activity | search_activities\n// A call must contain ONE kind of op (so outputs stay index-aligned with inputs).\nconst cfg = $('Load config').first().json.crm;\nconst F = cfg.fields;\nconst base = cfg.base_url.replace(/\\/$/, '');\nconst items = $('Start').all().map(i => i.json);\n\nconst ops = new Set(items.map(i => i.op));\nif (ops.size > 1) throw new Error(`CRM adapter received mixed ops (${[...ops].join(', ')}). Send one op per call.`);\nif (items.filter(i => i.op === 'search_activities').length > 1)\n  throw new Error('search_activities: send one search per call (use Execute Workflow mode \"each\").');\n\n// Zoho search criteria need ( ) , escaped\nconst zEsc = v => String(v).replace(/([(),\\\\])/g, '\\\\$1');\nconst zTime = iso => DateTime.fromISO(iso).toUTC().toFormat(\"yyyy-MM-dd'T'HH:mm:ss'+00:00'\");\n\nfunction build({ op, payload = {} }) {\n  const r = { op, method: 'GET', url: '', qs: {}, body: null, kind: 'read' };\n  const p = cfg.provider;\n\n  if (op === 'noop') return { ...r, kind: 'skip' };\n\n  if (op === 'get_record') {\n    if (p === 'zoho')    return { ...r, url: `${base}/crm/v8/${cfg.contact_module}/${payload.id}`, qs: { fields: (payload.fields || []).join(',') } };\n    if (p === 'hubspot') return { ...r, url: `${base}/crm/v3/objects/contacts/${payload.id}`, qs: { properties: (payload.fields || []).join(',') } };\n    return { ...r, url: `${base}/contacts/${payload.id}`, qs: { fields: (payload.fields || []).join(',') } };\n  }\n\n  if (op === 'update_record') {\n    const w = { ...r, kind: 'write' };\n    if (p === 'zoho')    return { ...w, method: 'PUT',   url: `${base}/crm/v8/${cfg.contact_module}/${payload.id}`, body: { data: [payload.fields] } };\n    if (p === 'hubspot') return { ...w, method: 'PATCH', url: `${base}/crm/v3/objects/contacts/${payload.id}`, body: { properties: payload.fields } };\n    return { ...w, method: 'PATCH', url: `${base}/contacts/${payload.id}`, body: payload.fields };\n  }\n\n  if (op === 'log_activity') {\n    const a = payload; const w = { ...r, kind: 'write', method: 'POST' };\n    if (p === 'zoho') return { ...w, url: `${base}/crm/v8/${cfg.activity_module}`, body: { data: [{\n      $se_module: cfg.contact_module,\n      [cfg.link_field]: a.contact_id,\n      Subject: a.run_name,\n      Call_Type: 'Outbound',\n      Outgoing_Call_Status: 'Completed',\n      Call_Start_Time: zTime(a.started_at),\n      Call_Duration: String(a.duration_secs ?? 0),\n      [F.outcome]: a.outcome_label,\n      [F.summary]: (a.summary || '').slice(0, 2000),\n      Description: a.note,\n    }] } };\n    if (p === 'hubspot') return { ...w, url: `${base}/crm/v3/objects/calls`, body: {\n      properties: {\n        hs_timestamp: a.started_at, hs_call_title: a.run_name, hs_call_body: a.note,\n        hs_call_direction: 'OUTBOUND', hs_call_status: 'COMPLETED', hs_call_duration: String((a.duration_secs ?? 0) * 1000),\n        [F.outcome]: a.outcome_label, [F.summary]: a.summary, [F.campaign_key]: a.campaign_key,\n        [F.campaign_run]: a.run_name, [F.contact_ref]: a.contact_id,\n      },\n      associations: [{ to: { id: a.contact_id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 194 }] }],\n    } };\n    return { ...w, url: `${base}/activities`, body: a };\n  }\n\n  if (op === 'search_activities') {\n    // payload: { run_name } for one run, or { subject_prefix, campaign_key, since } for a window\n    const s = { ...r, kind: p === 'hubspot' ? 'search_cursor' : 'search_page' };\n    if (p === 'zoho') {\n      const criteria = payload.run_name\n        ? `(Subject:equals:${zEsc(payload.run_name)})`\n        : `((Subject:starts_with:${zEsc(payload.subject_prefix)})and(Call_Start_Time:greater_equal:${zTime(payload.since)}))`;\n      return { ...s, url: `${base}/crm/v8/${cfg.activity_module}/search`,\n        qs: { criteria, fields: [cfg.link_field, 'Subject', F.outcome, 'Call_Start_Time'].join(','), per_page: 200, page: 1 } };\n    }\n    if (p === 'hubspot') {\n      const filters = payload.run_name\n        ? [{ propertyName: F.campaign_run, operator: 'EQ', value: payload.run_name }]\n        : [{ propertyName: F.campaign_key, operator: 'EQ', value: payload.campaign_key },\n           { propertyName: 'hs_timestamp', operator: 'GTE', value: String(DateTime.fromISO(payload.since).toMillis()) }];\n      return { ...s, method: 'POST', url: `${base}/crm/v3/objects/calls/search`,\n        body: { filterGroups: [{ filters }], properties: [F.outcome, F.campaign_run, F.contact_ref, 'hs_timestamp'], limit: 100 } };\n    }\n    return { ...s, url: `${base}/activities`, qs: { ...payload, page: 1 } };\n  }\n\n  throw new Error(`Unknown CRM op \"${op}\"`);\n}\n\nreturn items.map(i => ({ json: build(i) }));\n"
+      },
+      "id": "4aeddc73-f661-5a06-8fe1-b7eb04863f4f",
+      "name": "Build request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 5,
+        "output": "={{ ({ skip: 0, read: 1, write: 2, search_page: 3, search_cursor: 4 })[$json.kind] }}"
+      },
+      "id": "4536e8b1-0515-57ae-9264-f8108b6603e5",
+      "name": "Route by request kind",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(() => ({ json: { ok: true, skipped: true, fields: {} } }));\n"
+      },
+      "id": "408b8b53-5bf8-5b78-829e-0735efc60c9f",
+      "name": "Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify($json.qs) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "1cbf448e-96e1-53c9-9c76-267081f0c57a",
+      "name": "CRM read",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "acbc9e90-dda3-5cb8-a914-eda0d0fe368a",
+      "name": "CRM write",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify($json.qs) }}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "page",
+                    "value": "={{ ($response.body?.info?.page ?? 1) + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body || !$response.body.info || $response.body.info.more_records !== true }}",
+              "limitPagesFetched": true,
+              "maxRequests": 40
+            }
+          }
+        }
+      },
+      "id": "b04196a7-1e6a-56b1-8c17-81332799b5d0",
+      "name": "CRM search (page param)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "body",
+                    "name": "after",
+                    "value": "={{ $response.body.paging.next.after }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.paging || !$response.body.paging.next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 40
+            }
+          }
+        }
+      },
+      "id": "d13c57ba-9246-56b2-a531-c15290963c32",
+      "name": "CRM search (cursor in body)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizes single-record responses (reads and writes) into { ok, status_code, id, fields, error }.\nconst provider = $('Load config').first().json.crm.provider;\nreturn $input.all().map(({ json: res }) => {\n  const code = res.statusCode ?? 0;\n  const body = res.body ?? {};\n  let ok = code >= 200 && code < 300;\n  let id = null, fields = {}, error = null;\n\n  if (provider === 'zoho') {\n    const row = Array.isArray(body.data) ? body.data[0] : null;\n    if (row?.status && row.status !== 'success') { ok = false; error = row.message || row.code; }\n    id = row?.details?.id ?? row?.id ?? null;\n    fields = row && !row.details ? row : {};\n  } else if (provider === 'hubspot') {\n    id = body.id ?? null; fields = body.properties ?? {};\n  } else {\n    id = body.id ?? null; fields = body.fields ?? body;\n  }\n  if (!ok && !error) error = body.message || body.error || `HTTP ${code}`;\n  return { json: { ok, status_code: code, id, fields, error } };\n});\n"
+      },
+      "id": "c274eadf-ac1c-5367-93d5-397fb8877dcd",
+      "name": "Normalize record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flattens every page of a paginated search into one list of canonical activities.\nconst cfg = $('Load config').first().json.crm;\nconst F = cfg.fields;\nconst pages = $input.all().map(i => i.json).filter(p => p && Object.keys(p).length);\n\nconst activities = pages.flatMap(page => {\n  if (cfg.provider === 'hubspot') return (page.results || []).map(r => ({\n    id: r.id, contact_id: r.properties?.[F.contact_ref] ?? null, run_name: r.properties?.[F.campaign_run] ?? '',\n    outcome: r.properties?.[F.outcome] ?? null, started_at: r.properties?.hs_timestamp ?? null,\n  }));\n  return (page.data || []).map(r => ({\n    id: r.id,\n    contact_id: typeof r[cfg.link_field] === 'object' ? r[cfg.link_field]?.id : (r[cfg.link_field] ?? r.contact_id ?? null),\n    run_name: r.Subject ?? r.run_name ?? '',\n    outcome: r[F.outcome] ?? r.outcome ?? null,\n    started_at: r.Call_Start_Time ?? r.started_at ?? null,\n  }));\n});\n\nreturn [{ json: { ok: true, count: activities.length, activities } }];\n"
+      },
+      "id": "6387cff4-e146-51ed-aafb-529bc497021e",
+      "name": "Normalize search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Build request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build request": {
+      "main": [
+        [
+          {
+            "node": "Route by request kind",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by request kind": {
+      "main": [
+        [
+          {
+            "node": "Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CRM read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CRM write",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CRM search (page param)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CRM search (cursor in body)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM read": {
+      "main": [
+        [
+          {
+            "node": "Normalize record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM write": {
+      "main": [
+        [
+          {
+            "node": "Normalize record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM search (page param)": {
+      "main": [
+        [
+          {
+            "node": "Normalize search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM search (cursor in body)": {
+      "main": [
+        [
+          {
+            "node": "Normalize search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsCrmAdapter00",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

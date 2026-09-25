@@ -1,0 +1,658 @@
+{
+  "name": "VoiceOps · 20 · Campaign Dispatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📞 Campaign dispatcher\nCRM (or cascade/retry) → **one outbound batch** on the voice platform.\n\n1. Normalize + E.164 + dedupe\n2. Deterministic A/B split, arm written back to CRM\n3. **Live eligibility re-check** right before dialling\n4. Real calendar slots only (booking campaigns)\n5. Submit batch, then hand off to the silent-failure sweeper",
+        "width": 460,
+        "height": 280,
+        "color": 7
+      },
+      "id": "c877fe53-4e73-5b22-a998-0d34d9a046e4",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -440
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voiceops/campaigns/dispatch",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "d3feed3b-5e3c-5bf2-a97f-188be753719f",
+      "name": "CRM trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -80
+      ],
+      "webhookId": "b61d990d-005e-5818-b01a-4ca162898643"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ef1096c7-c4d6-5e38-8a65-15a24c999556",
+      "name": "Internal trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two entry points share one pipeline: the CRM webhook, and internal calls (cascade touches, retries).\nconst src = $input.first().json;\nconst input = src.body ?? src;\nif (!input.campaign_key) throw new Error('campaign_key is required');\nif (!Array.isArray(input.recipients)) throw new Error('recipients must be an array');\nreturn [{ json: {\n  campaign_key: String(input.campaign_key),\n  run_name: input.run_name ?? null,\n  touch_label: input.touch_label ?? null,\n  attempt: Number(input.attempt ?? 1),\n  skip_ab: input.skip_ab === true,\n  recipients: input.recipients,\n} }];\n"
+      },
+      "id": "53246dd7-1c91-5fd9-837f-98e6d4092ab6",
+      "name": "Normalize trigger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "d79af32e-2f12-5629-81af-0f422be4a788",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        460,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resolve the campaign, name the run, clean the recipient list.\nconst cfg = $('Load config').first().json;\nconst req = $('Normalize trigger').first().json;\nconst campaign = cfg.campaigns[req.campaign_key];\nif (!campaign) throw new Error(`Unknown campaign \"${req.campaign_key}\" — add it to 00-config`);\n\n// Voice APIs want E.164. CRMs rarely store it that way.\nfunction toE164(raw, cc) {\n  if (!raw) return null;\n  let s = String(raw).replace(/[^\\d+]/g, '');\n  if (s.startsWith('00')) s = '+' + s.slice(2);\n  if (!s.startsWith('+') && cc && s.startsWith('0')) s = '+' + cc + s.slice(1);\n  return /^\\+\\d{8,15}$/.test(s) ? s : null;\n}\n\nconst today = DateTime.now().setZone(campaign.timezone).toISODate();\nlet run_name = req.run_name || `${campaign.label} ${today}`;\nif (req.touch_label) run_name += ` (${req.touch_label})`;\n\nconst seen = new Set(); const rejected = [];\nconst recipients = [];\nfor (const r of req.recipients) {\n  const id = r.id != null ? String(r.id) : '';\n  const phone = toE164(r.phone_number ?? r.phone, campaign.default_country_code);\n  if (!id || !phone) { rejected.push({ id, reason: !id ? 'missing id' : 'invalid phone' }); continue; }\n  if (seen.has(id)) continue;\n  seen.add(id);\n  recipients.push({ ...r, id, phone_number: phone });\n}\n\nreturn [{ json: { campaign_key: req.campaign_key, campaign, run_name, attempt: req.attempt,\n                  skip_ab: req.skip_ab, recipients, rejected } }];\n"
+      },
+      "id": "5b1e79c9-d953-5d7e-9f3d-cb01614f4555",
+      "name": "Resolve run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "dataToSave": {
+          "values": [
+            {
+              "key": "run_name",
+              "value": "={{ $json.run_name }}"
+            },
+            {
+              "key": "campaign",
+              "value": "={{ $json.campaign_key }}"
+            }
+          ]
+        }
+      },
+      "id": "56e1eca6-1016-503c-8d45-0bcea3cd2fd9",
+      "name": "Tag execution",
+      "type": "n8n-nodes-base.executionData",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "recipients",
+        "options": {}
+      },
+      "id": "e7ae5f8d-6a82-5873-9719-fdd92514e96f",
+      "name": "One item per person",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Deterministic A/B: same person + same salt → same arm, on every run and every server.\n// FNV-1a over \"salt:id\", bucket 0-99. A per-campaign salt keeps experiments independent.\nconst run = $('Resolve run').first().json;\nconst ab = run.campaign.ab_test;\nfunction fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }\n  return h;\n}\nreturn $input.all().map(({ json }) => {\n  let ab_arm = 'treatment';\n  if (ab?.enabled && !run.skip_ab) {\n    const bucket = fnv1a(`${ab.salt || run.campaign_key}:${json.id}`) % 100;\n    ab_arm = bucket < (ab.treatment_pct ?? 50) ? 'treatment' : 'control';\n  }\n  return { json: { ...json, ab_arm } };\n});\n"
+      },
+      "id": "7bcdbd19-64e2-57b1-9e4f-fc73ac4dc131",
+      "name": "Assign A/B arm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Persist the arm on the CRM record so the control group is measurable later.\nconst run = $('Resolve run').first().json;\nconst ab = run.campaign.ab_test;\nif (!ab?.enabled || run.skip_ab || !ab.crm_field) return [];\nreturn $input.all().map(({ json }) => {\n  const label = ab.labels[json.ab_arm];\n  // NB: on multi-select fields most CRMs REPLACE the array — merge first if the field holds other values.\n  return { json: { op: 'update_record', payload: { id: json.id, fields: { [ab.crm_field]: ab.multi_select ? [label] : label } } } };\n});\n"
+      },
+      "id": "f259d8c6-4141-5bcb-9651-6de52b2115c1",
+      "name": "Build A/B tag writes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "bdc74cb8-dc03-51e6-8d7f-65bec9f368ae",
+      "name": "Write A/B arm to CRM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1780,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "71d23dec-8bed-558e-9819-74ec28ad3c5e",
+              "leftValue": "={{ $json.ab_arm }}",
+              "rightValue": "treatment",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "7c1cb9cc-bda7-5350-9907-82eb509a4c9a",
+      "name": "Treatment arm only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// If the campaign has eligibility rules, fetch the live record for each person (state drifts between trigger and dial).\nconst rules = $('Resolve run').first().json.campaign.eligibility;\nconst fields = rules ? [...new Set([\n  rules.status_field,\n  ...rules.checklist.flatMap(c => [...(c.any_of ?? [c.field]), ...(c.exempt_if ?? []).map(e => e.field), ...(c.label_by ? [c.label_by.field] : [])]),\n])] : [];\nreturn $input.all().map(({ json }) => ({ json: rules\n  ? { op: 'get_record', payload: { id: json.id, fields } }\n  : { op: 'noop', payload: { id: json.id } } }));\n"
+      },
+      "id": "09d78e9d-10ed-5b40-897f-cdc365a71ee3",
+      "name": "Build eligibility lookups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "92a82143-7d58-5c35-b1c7-69b991aa015e",
+      "name": "Fetch live records",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2000,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pair lookups with people BY INDEX, explicitly — never via .first() inside a per-person loop.\nconst rules = $('Resolve run').first().json.campaign.eligibility;\nconst people = $('Treatment arm only').all();\nconst lookups = $input.all();\nif (people.length !== lookups.length)\n  throw new Error(`Adapter returned ${lookups.length} results for ${people.length} people — refusing to guess pairing`);\n\nfunction evaluate(f) {\n  const status = f[rules.status_field];\n  if (!rules.allowed_statuses.includes(status)) return { eligible: false, ineligible_reason: `status is now \"${status}\"`, action_items: [] };\n  const open = [];\n  let started = 0;\n  for (const item of rules.checklist) {\n    const keys = item.any_of ?? [item.field];\n    started += keys.filter(k => f[k] !== null && f[k] !== undefined && f[k] !== '').length;\n    if ((item.exempt_if ?? []).some(e => e.values.includes(f[e.field]))) continue;\n    const accepted = item.accepted_values ?? rules.accepted_values ?? ['Accepted'];\n    if (keys.some(k => accepted.includes(f[k]))) continue;\n    let label = item.label;\n    if (item.label_by) label = item.label_by.map?.[f[item.label_by.field]] ?? item.label_by.default ?? label;\n    open.push(label);\n  }\n  const eligible = open.length >= (rules.min_open_items ?? 1) && started >= (rules.min_started_items ?? 0);\n  return { eligible, ineligible_reason: eligible ? null : `open items ${open.length}, started ${started}`, action_items: open };\n}\n\nreturn people.map(({ json: person }, i) => {\n  const rec = lookups[i].json;\n  if (!rules) return { json: { ...person, eligible: true, action_items: person.action_items ?? [] } };\n  if (!rec.ok) return { json: { ...person, eligible: false, ineligible_reason: `lookup failed: ${rec.error}` } };\n  return { json: { ...person, ...evaluate(rec.fields) } };\n});\n"
+      },
+      "id": "27d36cea-fb9b-54dd-a9e8-6ea031185d97",
+      "name": "Evaluate eligibility",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4f80cd0e-958b-5fb3-9ed2-d46d67735a50",
+              "leftValue": "={{ $json.eligible }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "c2f4ceab-6184-5f70-b04e-22569e0a381c",
+      "name": "Still eligible",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2440,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const recipients = $input.all().map(i => i.json);\nif (!recipients.length) return [];          // nobody left to call → stop quietly\nconst c = $('Resolve run').first().json.campaign;\nreturn [{ json: {\n  recipients,\n  calendar: c.booking?.enabled\n    ? { op: 'availability', event_type_uri: c.booking.event_type_uri, lookahead_days: c.booking.lookahead_days ?? 7 }\n    : { op: 'noop' },\n} }];\n"
+      },
+      "id": "481b5161-50c6-50d1-9185-7b01b6171197",
+      "name": "Collect batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json.calendar }];\n"
+      },
+      "id": "a90685cb-3ff7-575e-b904-0c76f41c5d27",
+      "name": "Calendar request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCalendar0000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b0d86c06-7538-5448-961b-79b8765c5348",
+      "name": "Get real availability",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3100,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the voice-provider batch. campaign_key + run_name travel as dynamic variables,\n// so every post-call webhook is self-describing (no extra API lookup to route it).\nconst cfg = $('Load config').first().json;\nconst run = $('Resolve run').first().json;\nconst c = run.campaign;\nconst cal = $input.first().json;\nconst { recipients } = $('Collect batch').first().json;\n\nif (c.booking?.enabled && !cal.ok)\n  throw new Error(`${run.run_name}: no calendar availability — not calling people with nothing to offer`);\n\nconst tz = c.timezone, loc = c.locale || 'en-GB';\nconst now = DateTime.now().setZone(tz).setLocale(loc);\nconst human = iso => DateTime.fromISO(iso).setZone(tz).setLocale(loc).toFormat(c.slot_format || \"cccc d LLLL 'at' HH:mm\");\n\nconst shared = {\n  campaign_key: run.campaign_key,\n  run_name: run.run_name,\n  today: now.toFormat('cccc d LLLL yyyy'),\n  tomorrow: now.plus({ days: 1 }).toFormat('cccc d LLLL yyyy'),\n  next_availabilities: (cal.slots || []).slice(0, c.booking?.max_slots_offered ?? 12).map(human).join(', '),\n};\n\nconst body = {\n  call_name: run.run_name,\n  agent_id: c.agent_id,\n  agent_phone_number_id: c.phone_number_id || cfg.voice.phone_number_id,\n  recipients: recipients.map(r => ({\n    phone_number: r.phone_number,\n    conversation_initiation_client_data: { dynamic_variables: {\n      ...shared,\n      contact_id: r.id,\n      contact_name: r.name ?? '',\n      contact_email: r.email ?? '',\n      contact_phone: r.phone_number,\n      action_item_count: (r.action_items ?? []).length,\n      action_items_list: (r.action_items ?? []).map((a, i) => `${i + 1}. ${a}`).join('\\n'),\n      ...(r.variables ?? {}),\n    } },\n  })),\n};\nreturn [{ json: { body, recipient_count: recipients.length } }];\n"
+      },
+      "id": "68532a8f-d7c7-5232-aad0-cc55fee316c3",
+      "name": "Build batch payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3320,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/batch-calling/submit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "5fff42eb-f96b-5c8c-9c8c-29d69707658f",
+      "name": "Submit batch call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3540,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const run = $('Resolve run').first().json;\nreturn [{ json: {\n  campaign_key: run.campaign_key,\n  run_name: run.run_name,\n  attempt: run.attempt,\n  batch_id: $input.first().json.id,\n  recipients: $('Collect batch').first().json.recipients,\n} }];\n"
+      },
+      "id": "7ac173e2-9586-5959-a83e-d8837e9d0629",
+      "name": "Sweeper input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3760,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsSweeper00000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "8feea41f-c7da-5490-8b56-a7c8616b12ff",
+      "name": "Start silent-failure sweeper",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3980,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "CRM trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Internal trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize trigger": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Resolve run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve run": {
+      "main": [
+        [
+          {
+            "node": "Tag execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag execution": {
+      "main": [
+        [
+          {
+            "node": "One item per person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per person": {
+      "main": [
+        [
+          {
+            "node": "Assign A/B arm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign A/B arm": {
+      "main": [
+        [
+          {
+            "node": "Build A/B tag writes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Treatment arm only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build A/B tag writes": {
+      "main": [
+        [
+          {
+            "node": "Write A/B arm to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Treatment arm only": {
+      "main": [
+        [
+          {
+            "node": "Build eligibility lookups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build eligibility lookups": {
+      "main": [
+        [
+          {
+            "node": "Fetch live records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch live records": {
+      "main": [
+        [
+          {
+            "node": "Evaluate eligibility",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate eligibility": {
+      "main": [
+        [
+          {
+            "node": "Still eligible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still eligible": {
+      "main": [
+        [
+          {
+            "node": "Collect batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect batch": {
+      "main": [
+        [
+          {
+            "node": "Calendar request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar request": {
+      "main": [
+        [
+          {
+            "node": "Get real availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get real availability": {
+      "main": [
+        [
+          {
+            "node": "Build batch payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build batch payload": {
+      "main": [
+        [
+          {
+            "node": "Submit batch call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit batch call": {
+      "main": [
+        [
+          {
+            "node": "Sweeper input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sweeper input": {
+      "main": [
+        [
+          {
+            "node": "Start silent-failure sweeper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsDispatcher00",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

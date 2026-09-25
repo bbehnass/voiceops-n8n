@@ -1,0 +1,337 @@
+{
+  "name": "VoiceOps · 50 · KPI Aggregator",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 KPI aggregator\nDaily, for every campaign with `kpi.enabled`: calls, first attempts vs retries, connect rate, success rate, and (optional) **realization** — did the booked session actually happen?\nPosts one JSON row per campaign/day to any ingest endpoint (dashboard, warehouse, sheet).",
+        "width": 460,
+        "height": 220,
+        "color": 7
+      },
+      "id": "78eec155-7ca7-5e7a-afd5-b2b5d57e53fc",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -340
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 21 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f245e89f-b1a1-5035-81d4-d0a55a098e2c",
+      "name": "Nightly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "da7161a7-2c6a-5bcc-9578-80a5b397cd3f",
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "53b6f8ac-25f0-5ac6-bb8a-507ded881d72",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        80
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst since = DateTime.now().minus({ days: cfg.kpi.lookback_days }).startOf('day').toUTC().toISO({ suppressMilliseconds: true });\nreturn Object.entries(cfg.campaigns)\n  .filter(([, c]) => c.kpi?.enabled)\n  .map(([key, c]) => ({ json: { campaign_key: key, op: 'search_activities',\n    payload: { subject_prefix: c.label, campaign_key: key, since } } }));\n"
+      },
+      "id": "ac9a05e3-15e7-5ed8-90fe-df040e66aa52",
+      "name": "Plan KPI jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "46069905-7d27-5c05-ad9b-dc4612f337c2",
+      "name": "Search activities per campaign",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One row per campaign per local day. Test runs excluded. Retries counted separately.\nconst cfg = $('Load config').first().json;\nconst plans = $('Plan KPI jobs').all();\nconst results = $input.all();\nif (plans.length !== results.length) throw new Error('KPI search results are not aligned with campaigns');\n\nconst rows = [];\nplans.forEach(({ json: plan }, i) => {\n  const c = cfg.campaigns[plan.campaign_key];\n  const k = c.kpi ?? {};\n  const notConnected = new Set((k.not_connected ?? ['voicemail', 'no answer', 'failed']).map(s => s.toLowerCase()));\n  const success = new Set((k.success_outcomes ?? ['booked']).map(s => s.toLowerCase()));\n  const days = {};\n  for (const a of results[i].json.activities ?? []) {\n    if (!String(a.run_name).startsWith(c.label) || /\\btest\\b/i.test(a.run_name)) continue;\n    const day = a.started_at ? DateTime.fromISO(a.started_at).setZone(c.timezone).toISODate() : 'unknown';\n    const d = days[day] ??= { total: 0, first_attempts: 0, retries: 0, connected: 0, successes: 0, outcomes: {}, success_contacts: [] };\n    const o = String(a.outcome ?? 'failed').toLowerCase();\n    d.total++;\n    /\\(Retry \\d+\\)/.test(a.run_name) ? d.retries++ : d.first_attempts++;\n    if (!notConnected.has(o)) d.connected++;\n    if (success.has(o)) { d.successes++; d.success_contacts.push(String(a.contact_id)); }\n    const key = o.replace(/\\s+/g, '_');\n    d.outcomes[key] = (d.outcomes[key] ?? 0) + 1;\n  }\n  for (const [date, d] of Object.entries(days)) rows.push({ campaign_key: plan.campaign_key, date, ...d });\n});\nreturn rows.sort((a, b) => a.date.localeCompare(b.date)).map(r => ({ json: r }));\n"
+      },
+      "id": "2e82ea44-2dfb-534d-9dd8-2ea76a43ad87",
+      "name": "Build daily rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Optional: check whether successes actually materialised (e.g. booked → attended) on the CRM record.\nconst cfg = $('Load config').first().json;\nconst want = new Map();\nfor (const { json: r } of $('Build daily rows').all()) {\n  const field = cfg.campaigns[r.campaign_key].kpi?.realization?.field;\n  if (field) for (const id of r.success_contacts) want.set(id, field);\n}\nif (!want.size) return [{ json: { op: 'noop', payload: {} } }];\nreturn [...want.entries()].map(([id, field]) => ({ json: { op: 'get_record', payload: { id, fields: [field] }, _id: id } }));\n"
+      },
+      "id": "f5280c62-e6b9-5e07-a23e-4ce55ee30681",
+      "name": "Build realization lookups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        80
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ae2f1ad7-3a25-5027-b87f-5689d3c30514",
+      "name": "Check realization",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst lookups = $('Build realization lookups').all();\nconst results = $input.all();\nconst realized = new Set();\nlookups.forEach(({ json: l }, i) => {\n  if (l.op !== 'get_record') return;\n  const f = results[i]?.json?.fields ?? {};\n  const [field] = l.payload.fields;\n  const truthy = Object.values(cfg.campaigns).find(c => c.kpi?.realization?.field === field)?.kpi.realization.truthy ?? [];\n  const v = f[field];\n  if (truthy.includes(v) || (truthy.includes('non_empty') && v != null && v !== '')) realized.add(l._id);\n});\nconst pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);\nreturn $('Build daily rows').all().map(({ json: r }) => {\n  const hasRealization = !!cfg.campaigns[r.campaign_key].kpi?.realization;\n  const realizedCount = hasRealization ? r.success_contacts.filter(id => realized.has(id)).length : null;\n  const { success_contacts, ...row } = r;\n  return { json: {\n    ...row,\n    realized: realizedCount,\n    connect_rate_pct: pct(r.connected, r.total),\n    success_rate_pct: pct(r.successes, r.connected),\n    realization_rate_pct: hasRealization ? pct(realizedCount, r.successes) : null,\n    generated_at: DateTime.now().toUTC().toISO(),\n  } };\n});\n"
+      },
+      "id": "40f8c159-267d-5754-882c-0058732a9c6b",
+      "name": "Finalize metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Load config').first().json.kpi.ingest_url ? $input.all() : [];\n"
+      },
+      "id": "10bfc33a-7994-5405-b3e9-cb9060c395a7",
+      "name": "Has ingest endpoint?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Load config').first().json.kpi.ingest_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "id": "12f2ecdf-dea3-5c97-b9a1-553cd4cbc089",
+      "name": "Post to dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        80
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Nightly": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Plan KPI jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan KPI jobs": {
+      "main": [
+        [
+          {
+            "node": "Search activities per campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search activities per campaign": {
+      "main": [
+        [
+          {
+            "node": "Build daily rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build daily rows": {
+      "main": [
+        [
+          {
+            "node": "Build realization lookups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build realization lookups": {
+      "main": [
+        [
+          {
+            "node": "Check realization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check realization": {
+      "main": [
+        [
+          {
+            "node": "Finalize metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize metrics": {
+      "main": [
+        [
+          {
+            "node": "Has ingest endpoint?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has ingest endpoint?": {
+      "main": [
+        [
+          {
+            "node": "Post to dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsKpi000000000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

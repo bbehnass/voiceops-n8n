@@ -1,0 +1,21 @@
+// Zoho CRM → Setup → Automation → Schedules → daily function
+// Selects today's candidates and hands them to the dispatcher. Selection lives in the CRM;
+// the "is it still true right now?" check lives in the dispatcher's eligibility rules.
+url = "https://<your-n8n>/webhook/voiceops/campaigns/dispatch";
+yesterday = zoho.currentdate.subDay(1).toString("yyyy-MM-dd");
+rows = zoho.crm.searchRecords("Contacts", "((Session_Status:equals:No show)and(Session_Date:equals:" + yesterday + "))");
+recipients = List();
+for each r in rows
+{
+    if(r.get("Mobile") != null)
+    {
+        recipients.add({"id":r.get("id"),"name":r.get("First_Name"),"phone_number":r.get("Mobile"),"email":r.get("Email")});
+    }
+}
+if(recipients.size() > 0)
+{
+    payload = {"campaign_key":"no_show_recovery","recipients":recipients};
+    resp = invokeurl [ url: url type: POST parameters: payload.toString()
+                       headers: {"Content-Type":"application/json","X-Webhook-Token":"<from a Zoho connection or org variable>"} ];
+    info resp;
+}

@@ -1,0 +1,473 @@
+{
+  "name": "VoiceOps · 30 · Post-call Router",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🛡️ Post-call router\n1. Verify HMAC over the **raw** body + reject stale timestamps (replay protection)\n2. Answer 200 fast, 401 on bad signature\n3. Route by `campaign_key` carried in the call's own dynamic variables (fallback: batch-name prefix)\n4. Hand off to the campaign's handler — generic by default, overridable per campaign\n\nUnknown campaign ⇒ execution fails ⇒ error notifier fires. Nothing is dropped silently.",
+        "width": 480,
+        "height": 280,
+        "color": 7
+      },
+      "id": "5183dc6c-0bfb-593a-81df-a47b04284394",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voiceops/voice/post-call",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "fdbc4e49-c3ba-53e0-b21c-8f45edc8fa4e",
+      "name": "Post-call webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "2a1a3186-aa16-5e63-8501-05b1be0c53fe"
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "data",
+        "destinationKey": "raw",
+        "options": {}
+      },
+      "id": "35058965-9261-5629-a82b-5c2bfdd18e31",
+      "name": "Read raw body",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c5ffea45-56fb-50cf-81b4-10a26c8c9d53",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ElevenLabs-style signature header: \"t=<unix>,v0=<hex hmac_sha256(secret, `${t}.${rawBody}`)>\"\nconst cfg = $('Load config').first().json;\nconst header = $('Post-call webhook').first().json.headers?.['elevenlabs-signature'] ?? '';\nconst parts = Object.fromEntries(header.split(',').map(p => p.trim().split('=')).filter(p => p.length === 2));\nconst t = Number(parts.t);\nconst raw = $('Read raw body').first().json.raw ?? '';\nif (!cfg.webhooks.voice_signing_secret) throw new Error('VOICE_WEBHOOK_SECRET is not configured');\nreturn [{ json: {\n  signed_payload: `${t}.${raw}`,\n  expected: parts.v0 ?? '',\n  fresh: Number.isFinite(t) && Math.abs(Date.now() / 1000 - t) <= cfg.webhooks.max_age_secs,\n  secret: cfg.webhooks.voice_signing_secret,\n} }];\n"
+      },
+      "id": "86d4353d-1865-58e7-800c-2ecec3af6ecb",
+      "name": "Parse signature header",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{ $json.signed_payload }}",
+        "dataPropertyName": "computed",
+        "secret": "={{ $json.secret }}"
+      },
+      "id": "5e8cfce8-81a1-5a51-8456-58c3cae28202",
+      "name": "HMAC-SHA256",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify, then parse the EXACT bytes that were signed (not the framework's re-serialized body).\nconst s = $input.first().json;\nconst valid = s.fresh && s.expected.length > 0 && s.expected.length === s.computed.length && s.expected === s.computed;\nif (!valid) return [{ json: { valid: false, reason: s.fresh ? 'bad signature' : 'stale or missing timestamp' } }];\nreturn [{ json: { valid: true, event: JSON.parse($('Read raw body').first().json.raw) } }];\n"
+      },
+      "id": "9654b54a-e6cb-556a-a153-ee86cac6a981",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c3935159-f64d-5fbc-a65b-a9f2885e5106",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "034542fc-1893-5d11-be04-eafcfffa066f",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.reason }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "403b99be-77e2-5cae-9455-d526c8e63ac7",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: true }) }}",
+        "options": {}
+      },
+      "id": "7c9ec2a0-c225-5b9f-a473-28d102934785",
+      "name": "Acknowledge (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ev = $('Verify signature').first().json.event;\nif (ev.type !== 'post_call_transcription') return [];   // audio/other event types are not handled here\nconst dv = ev.data?.conversation_initiation_client_data?.dynamic_variables ?? {};\nreturn [{ json: {\n  event: ev,\n  campaign_key: dv.campaign_key ?? null,\n  run_name: dv.run_name ?? null,\n  batch_id: ev.data?.metadata?.batch_call?.batch_call_id ?? null,\n} }];\n"
+      },
+      "id": "79d185e9-ad47-54fd-9f53-ec63a8c97fc6",
+      "name": "Resolve campaign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0d6c1e1-f63d-5b33-8b0e-8af690d16269",
+              "leftValue": "={{ $json.campaign_key }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "9c9a0918-d62e-56b9-9c9b-f2f61bd2313a",
+      "name": "Campaign in call variables?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Load config').first().json.voice.base_url }}/v1/convai/batch-calling/{{ $json.batch_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "c772ba89-11c6-5293-8e95-402fa0992449",
+      "name": "Get batch details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fallback for calls dispatched without campaign variables: match the batch name against campaign labels.\nconst cfg = $('Load config').first().json;\nconst x = $('Resolve campaign').first().json;\nconst name = $input.first().json.name ?? '';\nconst hit = Object.entries(cfg.campaigns).sort((a, b) => b[1].label.length - a[1].label.length)\n  .find(([, c]) => name.startsWith(c.label));\nreturn [{ json: { ...x, campaign_key: hit?.[0] ?? null, run_name: x.run_name ?? name } }];\n"
+      },
+      "id": "ed0f4a24-99c7-59ee-9f58-ba42c43b3235",
+      "name": "Match campaign by batch name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst x = $input.first().json;\nconst campaign = cfg.campaigns[x.campaign_key];\nif (!campaign) throw new Error(`Post-call event for unknown campaign (batch ${x.batch_id}) — not routed`);  // loud, never silent\nreturn [{ json: { ...x, handler_workflow_id: campaign.handler_workflow_id || cfg.workflows.outcome_handler } }];\n"
+      },
+      "id": "4d400b32-55c2-5583-8ce0-c1b329e7927d",
+      "name": "Pick handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.handler_workflow_id }}"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ad524860-b6a1-52b1-aba3-7c09f2495142",
+      "name": "Run outcome handler",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2860,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Post-call webhook": {
+      "main": [
+        [
+          {
+            "node": "Read raw body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read raw body": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Parse signature header",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse signature header": {
+      "main": [
+        [
+          {
+            "node": "HMAC-SHA256",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC-SHA256": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge (200)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge (200)": {
+      "main": [
+        [
+          {
+            "node": "Resolve campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve campaign": {
+      "main": [
+        [
+          {
+            "node": "Campaign in call variables?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campaign in call variables?": {
+      "main": [
+        [
+          {
+            "node": "Pick handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get batch details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get batch details": {
+      "main": [
+        [
+          {
+            "node": "Match campaign by batch name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match campaign by batch name": {
+      "main": [
+        [
+          {
+            "node": "Pick handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick handler": {
+      "main": [
+        [
+          {
+            "node": "Run outcome handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsRouter000000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

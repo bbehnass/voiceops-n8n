@@ -1,0 +1,297 @@
+{
+  "name": "VoiceOps · 11 · Calendar Tools",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📅 Calendar tools\n`availability` → real open slots (Calendly allows ≤7 days per request).\n`book` → creates the invitee and **only reports success on HTTP 201**.\nReplace with Cal.com / Google Calendar by keeping the same inputs and outputs.",
+        "width": 420,
+        "height": 200,
+        "color": 7
+      },
+      "id": "a3c0a5b1-22d7-520a-a404-d314eaae2801",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "169a2104-aa05-5677-89ee-ddd3f0ee461b",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ops: noop | availability | book   — Calendly implementation (swap this workflow for Cal.com / Google, same contract)\nconst r = $input.first().json;\nreturn [{ json: { ...r, route: ({ noop: 0, availability: 1, book: 2 })[r.op] ?? 0 } }];\n"
+      },
+      "id": "7b577466-a7b9-5e7a-9f2a-56b564be87a7",
+      "name": "Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 3,
+        "output": "={{ $json.route }}"
+      },
+      "id": "7aa9a87a-1782-5507-8c8f-2dc6a608ecaf",
+      "name": "Op",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ok: true, skipped: true, slots: [] } }];\n"
+      },
+      "id": "d4d2ea58-5898-541a-99a9-77d4f611104b",
+      "name": "Nothing to do",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.calendly.com/event_type_available_times",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "event_type",
+              "value": "={{ $json.event_type_uri }}"
+            },
+            {
+              "name": "start_time",
+              "value": "={{ $now.toUTC().plus({ minutes: 5 }).toISO() }}"
+            },
+            {
+              "name": "end_time",
+              "value": "={{ $now.toUTC().plus({ days: Math.min($json.lookahead_days || 7, 7) }).minus({ minutes: 1 }).toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9fc5328e-9c14-514b-9e21-c21489329c9e",
+      "name": "Get available times",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only offer slots that really exist. The agent never invents availability.\nconst res = $input.first().json;\nconst slots = (res.collection || []).filter(s => s.status === 'available').map(s => s.start_time);\nreturn [{ json: { ok: slots.length > 0, slots } }];\n"
+      },
+      "id": "259951a7-5730-5a64-963c-b8ee411f4440",
+      "name": "Available slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.event_type_uri }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "id": "3f627d6c-8db7-5ad8-8cc2-53a2dba78b3e",
+      "name": "Get event type",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('Route').first().json;\nconst loc = $input.first().json.resource?.locations?.[0];\nreturn [{ json: { body: {\n  event_type: req.event_type_uri,\n  start_time: req.start_time,\n  invitee: { name: req.invitee.name, email: req.invitee.email, timezone: req.invitee.timezone,\n             ...(req.invitee.phone ? { text_reminder_number: req.invitee.phone } : {}) },\n  ...(loc ? { location: { kind: loc.kind, ...(loc.location ? { location: loc.location } : {}) } } : {}),\n  tracking: { utm_source: 'voiceops', utm_medium: 'ai-call', utm_campaign: req.tracking?.campaign ?? null },\n} } }];\n"
+      },
+      "id": "f52042d9-33e4-5032-b757-d2275f8c6bb2",
+      "name": "Build invitee",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.calendly.com/invitees",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "bb3b8764-ea24-5aa1-8654-5a5fafd15d6b",
+      "name": "Create invitee",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A booking only counts if the calendar API says 201 Created. Anything else is a failure we record.\nconst res = $input.first().json;\nconst ok = res.statusCode === 201;\nreturn [{ json: { ok, status_code: res.statusCode, booking_uri: ok ? res.body?.resource?.uri ?? null : null,\n                  error: ok ? null : (res.body?.message || res.body?.title || `HTTP ${res.statusCode}`) } }];\n"
+      },
+      "id": "8f1459fe-a935-5044-a9b4-61f20197c0da",
+      "name": "Booking result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Op",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Op": {
+      "main": [
+        [
+          {
+            "node": "Nothing to do",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get available times",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get event type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get available times": {
+      "main": [
+        [
+          {
+            "node": "Available slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get event type": {
+      "main": [
+        [
+          {
+            "node": "Build invitee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build invitee": {
+      "main": [
+        [
+          {
+            "node": "Create invitee",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create invitee": {
+      "main": [
+        [
+          {
+            "node": "Booking result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsCalendar0000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

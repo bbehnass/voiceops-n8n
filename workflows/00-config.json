@@ -1,0 +1,72 @@
+{
+  "name": "VoiceOps · 00 · Config",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ⚙️ Central config\nEvery workflow calls this first. Edit campaigns, CRM field names and providers **here only**.\n\nSecrets come from environment variables (`$env`) — see `.env.example`.",
+        "width": 380,
+        "height": 200,
+        "color": 7
+      },
+      "id": "9884728a-1457-5e2f-ab8b-72e083a5ec78",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "60d73287-5d95-590b-a8a0-fe451a4d1119",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────────────\n// VoiceOps — central configuration.\n// Every workflow calls this sub-workflow first (\"Load config\"), so a\n// campaign, CRM field or provider is changed in exactly one place.\n// Secrets are read from environment variables, never stored here.\n// ─────────────────────────────────────────────────────────────────────\nconst env = (key, fallback = '') => {\n  try { return $env[key] ?? fallback; } catch (e) { return fallback; }  // $env may be blocked on some hosts\n};\n\nconst CONFIG = {\n  crm: {\n    provider: env('CRM_PROVIDER', 'zoho'),              // 'zoho' | 'hubspot' | 'generic'\n    base_url: env('CRM_BASE_URL', 'https://www.zohoapis.eu'),\n    contact_module: 'Contacts',                         // Zoho module holding the people you call (Contacts, Leads, Accounts…)\n    activity_module: 'Calls',                           // where every call attempt is logged\n    link_field: 'Who_Id',                               // Zoho: Who_Id for Contacts/Leads, What_Id for Accounts/Deals\n    fields: {                                           // canonical name → your CRM's API field name\n      outcome: 'AI_Call_Outcome',\n      summary: 'AI_Call_Summary',\n      campaign_key: 'AI_Campaign',                      // HubSpot/generic only (Zoho encodes it in Subject)\n      campaign_run: 'AI_Campaign_Run',\n      contact_ref: 'AI_Contact_Ref',\n    },\n  },\n\n  voice: {\n    base_url: env('VOICE_API_BASE_URL', 'https://api.elevenlabs.io'),  // use your data-residency host if any\n    phone_number_id: env('VOICE_PHONE_NUMBER_ID', 'REPLACE_ME'),\n    conversation_url_template: 'https://elevenlabs.io/app/conversational-ai/history/{conversation_id}',\n  },\n\n  webhooks: {\n    voice_signing_secret: env('VOICE_WEBHOOK_SECRET', ''),  // HMAC secret of the post-call webhook\n    max_age_secs: 1800,                                     // replay protection window\n  },\n\n  safety_net: {\n    initial_delay_minutes: 20,   // first look after a batch is submitted\n    poll_every_minutes: 10,      // then poll the batch until it has finished dialling\n    max_polls: 12,\n    grace_minutes: 5,            // leave late webhooks time to land before declaring silence\n  },\n\n  alerts: { webhook_url: env('ALERT_WEBHOOK_URL', '') },   // Slack/Teams incoming-webhook compatible\n  kpi: { ingest_url: env('KPI_INGEST_URL', ''), lookback_days: 14 },\n\n  qa: {\n    sheet_id: env('QA_SHEET_ID', 'REPLACE_ME'),\n    gateway_token: env('QA_GATEWAY_TOKEN', ''),\n    model: env('QA_MODEL', 'claude-sonnet-5'),\n    max_tokens: 6000,\n    price_per_mtok: { input: null, output: null, cache_read: null, cache_write: null }, // fill in to track cost\n    filters: { min_duration_secs: 45, min_messages: 6 },\n  },\n\n  workflows: { outcome_handler: 'vopsOutcome00000' },\n\n  defaults: {\n    outcome_keys: { outcome: 'call_outcome', scheduled_datetime: 'scheduled_datetime_iso', refusal_reason: 'refusal_reason' },\n    outcome_aliases: { no_answer: 'no_answer', 'no-answer': 'no_answer', callback: 'callback_requested', declined: 'refused' },\n    outcome_labels: {\n      booked: 'Booked', booking_failed: 'Booking failed', refused: 'Refused', voicemail: 'Voicemail',\n      no_answer: 'No answer', failed: 'Failed', callback_requested: 'Callback requested',\n      confirmed: 'Confirmed', completed: 'Completed',\n    },\n  },\n\n  // ── Campaigns ──────────────────────────────────────────────────────\n  // key = what the CRM trigger sends as campaign_key\n  campaigns: {\n    no_show_recovery: {\n      label: 'No Show Recovery',                // prefix of every run name / CRM activity subject\n      agent_id: env('AGENT_NO_SHOW', 'REPLACE_ME'),\n      timezone: 'Europe/London', locale: 'en-GB', default_country_code: '44',\n      booking: { enabled: true, event_type_uri: 'https://api.calendly.com/event_types/REPLACE_ME', lookahead_days: 7, max_slots_offered: 12 },\n      ab_test: { enabled: true, treatment_pct: 50, salt: 'nsr-2026', crm_field: 'AB_Tests', multi_select: true,\n                 labels: { treatment: 'No Show Recovery - AI called', control: 'No Show Recovery - control' } },\n      eligibility: null,\n      retry: { enabled: true, retry_on: ['Voicemail', 'No answer', 'Failed'], max_retries: 1, delay_minutes: 180 },\n      kpi: { enabled: true, success_outcomes: ['booked'], realization: { field: 'Session_Attended', truthy: ['Yes', true] } },\n    },\n\n    missing_documents: {\n      label: 'Missing Documents',\n      agent_id: env('AGENT_MISSING_DOCS', 'REPLACE_ME'),\n      timezone: 'Europe/London', locale: 'en-GB', default_country_code: '44',\n      booking: { enabled: false },\n      ab_test: { enabled: true, treatment_pct: 50, salt: 'docs-2026', crm_field: 'AB_Tests', multi_select: true,\n                 labels: { treatment: 'Missing Docs - AI called', control: 'Missing Docs - control' } },\n      eligibility: {                               // re-checked live right before EVERY call\n        status_field: 'Onboarding_Stage',\n        allowed_statuses: ['Documents Missing'],\n        accepted_values: ['Accepted'],\n        min_open_items: 2,                         // don't burn a call on someone who is nearly done…\n        min_started_items: 1,                      // …or on someone who never engaged at all\n        checklist: [\n          { label: 'Identity document', any_of: ['Passport_Status', 'ID_Card_Status', 'Driving_Licence_Status'] },\n          { label: 'Right to work', field: 'Right_To_Work_Status', exempt_if: [{ field: 'Residency', values: ['Citizen'] }] },\n          { label: 'Background check', field: 'Background_Check_Status' },\n          { label: 'Business registration', field: 'Business_Registration_Status',\n            label_by: { field: 'Registration_Progress', map: { Obtained: 'Upload business registration', Requested: 'Business registration pending' }, default: 'Register your business' } },\n          { label: 'Profile photo', field: 'Profile_Photo_Status' },\n          { label: 'Onboarding quiz', field: 'Onboarding_Quiz_Result', accepted_values: [1, '1', 'Passed'] },\n        ],\n      },\n      cascade: { touch_offsets_days: [0, 3, 7], skip_weekends: true, send_hour: 11 },\n      retry: { enabled: true, retry_on: ['Voicemail', 'No answer', 'Failed'], max_retries: 1, delay_minutes: 240 },\n      kpi: { enabled: true, success_outcomes: ['completed', 'confirmed'] },\n    },\n\n    appointment_reminder: {\n      label: 'Appointment Reminder',\n      agent_id: env('AGENT_REMINDER', 'REPLACE_ME'),\n      timezone: 'Europe/Paris', locale: 'fr-FR', default_country_code: '33',\n      booking: { enabled: false },\n      ab_test: { enabled: false },\n      eligibility: null,\n      retry: { enabled: false },\n      kpi: { enabled: true, success_outcomes: ['confirmed'], realization: { field: 'Session_Attended', truthy: ['Yes', true] } },\n    },\n  },\n};\n\nreturn [{ json: CONFIG }];\n"
+      },
+      "id": "3e1c1c5b-8376-59bf-8a8f-b484b8d98d76",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsConfig000000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

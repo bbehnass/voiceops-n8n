@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VoiceOps QA — voice agent review console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#fff;--ink:#14171c;--muted:#5d6675;--line:#e3e6eb;--soft:#eef1f5;
+  --accent:#3b5bfd;--accent-ink:#fff;--good:#118a4e;--warn:#b86e00;--bad:#c62f3a;
+  --radius:12px;--shadow:0 1px 2px rgba(16,24,40,.06),0 4px 16px rgba(16,24,40,.05);
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1115;--panel:#171a21;--ink:#e8ebf0;--muted:#98a2b3;--line:#262b35;--soft:#1e222b;--accent:#6d86ff;--shadow:none}}
+:root[data-theme="dark"]{--bg:#0f1115;--panel:#171a21;--ink:#e8ebf0;--muted:#98a2b3;--line:#262b35;--soft:#1e222b;--accent:#6d86ff;--shadow:none}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--font)}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar{max-width:1180px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.brand i{width:10px;height:10px;border-radius:3px;background:var(--accent);display:inline-block}
+.brand img{height:24px;width:auto;display:block}
+nav{display:flex;gap:4px;margin-left:8px}
+nav button{border:0;background:none;color:var(--muted);padding:8px 12px;border-radius:8px;font:500 14px var(--font);cursor:pointer}
+nav button[aria-selected="true"]{background:var(--soft);color:var(--ink)}
+.spacer{flex:1}
+.pill{font-size:12px;padding:3px 8px;border-radius:999px;background:var(--soft);color:var(--muted)}
+.pill.demo{background:#fff4d6;color:#7a5300}
+main{max-width:1180px;margin:0 auto;padding:20px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
+.grid{display:grid;gap:14px}.g4{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+h2{font-size:16px;margin:0 0 12px}h3{font-size:14px;margin:0 0 8px}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+select,input,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font:14px var(--font)}
+textarea{font:12.5px/1.55 var(--mono);min-height:320px;resize:vertical}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}.row>div{flex:1;min-width:140px}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:9px 14px;border-radius:8px;font:500 14px var(--font);cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.check{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}.check input{width:auto}
+.stat .v{font-size:26px;font-weight:700;letter-spacing:-.02em}.stat .k{color:var(--muted);font-size:12px}
+.muted{color:var(--muted)}.mono{font-family:var(--mono);font-size:12.5px}
+.chip{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--soft);color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.chip.critical{background:#fde8ea;color:var(--bad)}.chip.major{background:#fff1dc;color:var(--warn)}.chip.minor{background:#e9f6ef;color:var(--good)}
+.issue{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-top:10px}
+.issue header{all:unset;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.issue p{margin:6px 0}.patch{background:var(--soft);border-radius:8px;padding:8px 10px;white-space:pre-wrap;font:12.5px/1.5 var(--mono)}
+.dims{display:grid;gap:6px}.dim{display:grid;grid-template-columns:130px 1fr 36px;gap:10px;align-items:center;font-size:13px}
+.track{height:8px;background:var(--soft);border-radius:99px;overflow:hidden}.fill{height:100%;background:var(--accent)}
+details.call{border:1px solid var(--line);border-radius:10px;margin-top:10px}
+details.call summary{cursor:pointer;padding:12px 14px;display:flex;gap:12px;align-items:center;list-style:none}
+details.call summary::-webkit-details-marker{display:none}
+details.call .body{padding:0 14px 14px}
+.score{font-weight:700;min-width:44px;text-align:center;border-radius:8px;padding:3px 6px}
+.s-good{background:#e9f6ef;color:var(--good)}.s-mid{background:#fff1dc;color:var(--warn)}.s-bad{background:#fde8ea;color:var(--bad)}
+.scroll-x{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:500}
+.diff{font:12.5px/1.55 var(--mono);border:1px solid var(--line);border-radius:10px;overflow:auto;max-height:520px}
+.diff div{padding:0 10px;white-space:pre-wrap}.diff .add{background:rgba(17,138,78,.12)}.diff .del{background:rgba(198,47,58,.12);text-decoration:line-through;opacity:.8}
+.empty{padding:36px;text-align:center;color:var(--muted)}
+.progress{height:4px;background:var(--soft);border-radius:99px;overflow:hidden;margin-top:12px}.progress i{display:block;height:100%;width:30%;background:var(--accent);animation:slide 1.2s infinite ease-in-out}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);padding:0;max-width:min(720px,92vw);width:100%}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+dialog .dh{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+dialog .db{padding:18px;max-height:70vh;overflow:auto}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><i id="brandMark"></i><span id="brandName">VoiceOps QA</span></div>
+    <nav role="tablist">
+      <button role="tab" data-tab="analyze" aria-selected="true">Analyze</button>
+      <button role="tab" data-tab="trends" aria-selected="false">Trends</button>
+      <button role="tab" data-tab="lab" aria-selected="false">Prompt Lab</button>
+    </nav>
+    <div class="spacer"></div>
+    <span id="modePill" class="pill"></span>
+    <button class="btn" id="openSettings">Settings</button>
+  </div>
+</header>
+
+<main>
+  <!-- ANALYZE -->
+  <section data-view="analyze">
+    <div class="panel">
+      <div class="row">
+        <div style="flex:2"><label for="agent">Agent</label><select id="agent"></select></div>
+        <div><label for="days">Look back</label><select id="days"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></div>
+        <div><label for="limit">Max calls</label><select id="limit"><option>3</option><option selected>5</option><option>10</option><option>20</option></select></div>
+        <label class="check"><input type="checkbox" id="force"> Re-analyze</label>
+        <button class="btn primary" id="run">Run analysis</button>
+      </div>
+      <div id="runState" class="muted" style="margin-top:10px"></div>
+      <div id="runProgress" class="progress hidden"><i></i></div>
+    </div>
+    <div id="results" class="grid" style="margin-top:14px"></div>
+  </section>
+
+  <!-- TRENDS -->
+  <section data-view="trends" class="hidden">
+    <div class="panel">
+      <div class="row"><div><label for="trendAgent">Agent</label><select id="trendAgent"><option value="">All agents</option></select></div>
+        <button class="btn" id="loadTrends">Refresh</button></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="panel"><h2>Average QA score by day</h2><canvas id="scoreChart" height="220"></canvas><div id="changes" class="muted" style="margin-top:8px;font-size:12px"></div></div>
+      <div class="panel"><h2>LLM time-to-first-byte (ms)</h2><canvas id="latencyChart" height="220"></canvas></div>
+    </div>
+    <div class="panel" style="margin-top:14px"><h2>Recent reviews</h2><div class="scroll-x" id="trendTable"></div></div>
+  </section>
+
+  <!-- PROMPT LAB -->
+  <section data-view="lab" class="hidden">
+    <div class="grid g2">
+      <div class="panel">
+        <h2>Current prompt</h2>
+        <div class="row" style="margin-bottom:10px"><div><select id="labAgent"></select></div><button class="btn" id="loadPrompt">Load</button></div>
+        <textarea id="currentPrompt" placeholder="Load an agent or paste a prompt…"></textarea>
+      </div>
+      <div class="panel">
+        <h2>Fixes to apply <span class="muted" id="fixCount"></span></h2>
+        <div id="fixList" class="empty">Tick “Send to Prompt Lab” on issues in the Analyze tab.</div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="rewrite">Generate revised prompt</button></div>
+        <div id="rewriteProgress" class="progress hidden"><i></i></div>
+      </div>
+    </div>
+    <div class="panel hidden" id="diffPanel" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Proposed prompt</h2>
+        <div style="flex:0;display:flex;gap:8px"><button class="btn" id="copyPrompt">Copy</button><button class="btn" id="markDeployed">Mark as deployed</button></div></div>
+      <p class="muted">Green = added, red = removed. Review before pasting into your agent — the model is instructed to apply only the selected fixes.</p>
+      <div class="diff" id="diff"></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <div class="dh"><strong>Settings</strong><button class="btn" data-close>Close</button></div>
+  <div class="db grid">
+    <div><label for="gw">Gateway URL (n8n webhook of workflow 61)</label><input id="gw" placeholder="https://n8n.example.com/webhook/voiceops/qa"></div>
+    <div><label for="tok">Gateway token</label><input id="tok" type="password" autocomplete="off"></div>
+    <label class="check"><input type="checkbox" id="demo"> Demo mode (synthetic data, no backend)</label>
+    <p class="muted" style="margin:0">Stored only in this browser. No provider API key is ever needed here — the gateway holds them.</p>
+    <div><button class="btn primary" id="saveSettings">Save</button></div>
+  </div>
+</dialog>
+<dialog id="transcript"><div class="dh"><strong>Transcript</strong><button class="btn" data-close>Close</button></div><div class="db mono" id="transcriptBody" style="white-space:pre-wrap"></div></dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ───────────────────────── YOUR BRAND — edit this block ─────────────────────────
+   Everything visual that is "yours" lives here. Leave a value empty to keep the
+   neutral default. Nothing else in the file needs to change.                    */
+const BRAND = {
+  name:        'VoiceOps QA',  // shown top-left and in the browser tab
+  logoUrl:     '',             // e.g. 'logo.svg' next to this file, or an https:// URL
+  accent:      '',             // main colour for buttons, bars and charts, e.g. '#0a7d5a'
+  accentDark:  '',             // same colour for dark mode (defaults to accent)
+  accentText:  ''              // text colour on accent buttons (default white)
+};
+(function applyBrand(b){
+  const root = document.documentElement.style;
+  if (b.accent) root.setProperty('--accent', b.accent);
+  if (b.accentText) root.setProperty('--accent-ink', b.accentText);
+  const dark = b.accentDark || b.accent;
+  if (dark) {
+    const css = document.createElement('style');
+    css.textContent = `@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--accent:${dark}}}:root[data-theme="dark"]{--accent:${dark}}`;
+    document.head.appendChild(css);
+  }
+  if (b.name) { document.getElementById('brandName').textContent = b.name; document.title = b.name; }
+  if (b.logoUrl) {
+    const img = new Image(); img.src = b.logoUrl; img.alt = b.name || 'logo';
+    img.onload = () => { const mark = document.getElementById('brandMark'); mark.replaceWith(img); };
+    const icon = document.createElement('link'); icon.rel = 'icon'; icon.href = b.logoUrl; document.head.appendChild(icon);
+  }
+})(BRAND);
+</script>
+
+<script>
+/* ───────────────────────── state & utils ───────────────────────── */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k, d){ try { return JSON.parse(localStorage.getItem('voiceops.'+k)) ?? d; } catch { return d; } },
+                set(k, v){ try { localStorage.setItem('voiceops.'+k, JSON.stringify(v)); } catch {} } };
+const state = { settings: store.get('settings', { gw:'', tok:'', demo:true }), agents:[], lastResult:null, fixes:new Map(), proposed:'' };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),2200); }
+const scoreClass = s => s >= 80 ? 's-good' : s >= 60 ? 's-mid' : 's-bad';
+const fmt = (v, u='') => v == null ? '—' : `${v}${u}`;
+
+/* ───────────────────────── API (gateway or demo) ───────────────────────── */
+async function api(action, params = {}) {
+  if (state.settings.demo || !state.settings.gw) return Demo.handle(action, params);
+  const res = await fetch(state.settings.gw, { method:'POST', headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({ token: state.settings.tok, action, params }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+async function pollJob(job_id, onTick) {
+  for (let i = 0; i < 90; i++) {                    // ~6 minutes
+    await sleep(i < 3 ? 1500 : 4000);
+    const s = await api('job_status', { job_id });
+    onTick?.(i);
+    if (s.status === 'done') return s.result;
+    if (s.status === 'error') throw new Error('Job failed');
+  }
+  throw new Error('Timed out waiting for the job');
+}
+window.addEventListener('error', e => { if (!state.settings.demo && state.settings.gw) api('log_client_error', { error: `${e.message} @ ${e.filename}:${e.lineno}` }).catch(()=>{}); });
+
+/* ───────────────────────── tabs & settings ───────────────────────── */
+document.querySelectorAll('nav [data-tab]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav [data-tab]').forEach(x => x.setAttribute('aria-selected', x === b));
+  document.querySelectorAll('[data-view]').forEach(v => v.classList.toggle('hidden', v.dataset.view !== b.dataset.tab));
+  if (b.dataset.tab === 'trends') loadTrends();
+});
+document.querySelectorAll('dialog [data-close]').forEach(b => b.onclick = () => b.closest('dialog').close());
+$('#openSettings').onclick = () => { $('#gw').value = state.settings.gw; $('#tok').value = state.settings.tok; $('#demo').checked = state.settings.demo; $('#settings').showModal(); };
+$('#saveSettings').onclick = () => {
+  state.settings = { gw: $('#gw').value.trim(), tok: $('#tok').value, demo: $('#demo').checked || !$('#gw').value.trim() };
+  store.set('settings', state.settings); $('#settings').close(); renderMode(); loadAgents();
+};
+function renderMode(){ const p=$('#modePill'); const demo = state.settings.demo || !state.settings.gw;
+  p.textContent = demo ? 'Demo data' : 'Live'; p.className = 'pill' + (demo ? ' demo' : ''); }
+
+/* ───────────────────────── agents ───────────────────────── */
+async function loadAgents() {
+  try {
+    const { agents } = await api('list_agents');
+    state.agents = agents;
+    const opts = agents.map(a => `<option value="${esc(a.agent_id)}">${esc(a.name)}</option>`).join('');
+    $('#agent').innerHTML = opts; $('#labAgent').innerHTML = opts;
+    $('#trendAgent').innerHTML = '<option value="">All agents</option>' + opts;
+  } catch (e) { toast('Could not load agents: ' + e.message); }
+}
+
+/* ───────────────────────── analyze ───────────────────────── */
+$('#run').onclick = async () => {
+  const btn = $('#run'); btn.disabled = true; $('#runProgress').classList.remove('hidden');
+  $('#results').innerHTML = ''; $('#runState').textContent = 'Queuing analysis…';
+  try {
+    const { job_id } = await api('start_analysis', { agent_id: $('#agent').value, days_back: +$('#days').value,
+      call_limit: +$('#limit').value, force_reanalyze: $('#force').checked });
+    $('#runState').textContent = `Job ${job_id} running — reviewing calls…`;
+    const result = await pollJob(job_id, i => $('#runState').textContent = `Job ${job_id} running — ${'•'.repeat((i % 3) + 1)}`);
+    state.lastResult = result; renderResult(result);
+    $('#runState').textContent = `Done — ${result.summary.calls_analyzed} call(s) reviewed.`;
+  } catch (e) { $('#runState').textContent = 'Error: ' + e.message; }
+  finally { btn.disabled = false; $('#runProgress').classList.add('hidden'); }
+};
+
+function renderResult(r) {
+  const s = r.summary;
+  if (!s.calls_analyzed) { $('#results').innerHTML = `<div class="panel empty">${esc(s.message || 'No qualifying calls in this window.')}</div>`; return; }
+  const dims = Object.entries(s.dimension_averages || {}).map(([k, v]) =>
+    `<div class="dim"><span>${esc(k.replace('_',' '))}</span><div class="track"><div class="fill" style="width:${(v||0)*10}%"></div></div><span class="mono">${fmt(v)}</span></div>`).join('');
+  const issues = (r.recurring_issues || []).map((iss, i) => issueHTML(iss, `r${i}`, `${iss.occurrences}× across calls`)).join('') || '<p class="muted">No recurring issues. 🎉</p>';
+  const calls = (r.calls || []).map((c, i) => callHTML(c, i)).join('');
+  $('#results').innerHTML = `
+    <div class="grid g4">
+      <div class="panel stat"><div class="k">Average score</div><div class="v">${fmt(s.average_score)}</div></div>
+      <div class="panel stat"><div class="k">Calls reviewed</div><div class="v">${s.calls_analyzed}${s.calls_failed ? `<span class="muted" style="font-size:13px"> (+${s.calls_failed} failed)</span>` : ''}</div></div>
+      <div class="panel stat"><div class="k">Avg LLM TTFB</div><div class="v">${fmt(s.latency_ms?.llm_avg, ' ms')}</div></div>
+      <div class="panel stat"><div class="k">Review cost</div><div class="v">${s.total_cost_usd == null ? '—' : '$' + s.total_cost_usd}</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="panel"><h2>Score by dimension</h2><div class="dims">${dims}</div></div>
+      <div class="panel"><h2>Recurring issues</h2>${issues}</div>
+    </div>
+    <div class="panel"><h2>Individual calls</h2>${calls}</div>`;
+  bindIssueToggles();
+  document.querySelectorAll('[data-transcript]').forEach(b => b.onclick = () => {
+    $('#transcriptBody').textContent = r.calls[+b.dataset.transcript].transcript || '(transcript not stored for this job)'; $('#transcript').showModal(); });
+}
+function issueHTML(iss, key, meta = '') {
+  const checked = state.fixes.has(key) ? 'checked' : '';
+  return `<div class="issue">
+    <header><span class="chip ${esc(iss.severity)}">${esc(iss.severity)}</span><span class="chip">${esc(iss.category)}</span><span class="muted" style="font-size:12px">${esc(meta)}</span></header>
+    <p><strong>${esc(iss.root_cause || '')}</strong></p>
+    <p class="muted">${esc(iss.evidence || '')}</p>
+    <p>${esc(iss.fix || '')}</p>
+    ${iss.prompt_patch ? `<div class="patch">${esc(iss.prompt_patch)}</div>` : ''}
+    ${iss.setting_change?.path ? `<div class="patch">${esc(iss.setting_change.path)} → ${esc(iss.setting_change.recommended)}</div>` : ''}
+    ${iss.category !== 'settings' ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-fix="${esc(key)}" ${checked}> Send to Prompt Lab</label>` : ''}
+  </div>`;
+}
+function callHTML(c, i) {
+  const e = c.evaluation;
+  if (!e) return `<details class="call"><summary><span class="score s-bad">!</span><span class="mono">${esc(c.conversation_id)}</span><span class="muted">${esc(c.parse_error || 'review failed')}</span></summary></details>`;
+  const issues = (e.issues || []).map((iss, j) => issueHTML(iss, `c${i}-${j}`)).join('') || '<p class="muted">No issues found.</p>';
+  const tests = (e.test_scenarios || []).map((t, j) => `<div class="issue"><strong>Test ${j + 1}: ${esc(t.goal)}</strong><p class="muted">${esc(t.caller_script)}</p><ul>${(t.pass_criteria || []).map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
+  return `<details class="call"><summary>
+      <span class="score ${scoreClass(e.overall)}">${esc(e.overall)}</span>
+      <span style="flex:1">${esc(e.verdict)}</span>
+      <span class="muted mono">${Math.round((c.duration_secs || 0) / 60)}m${String((c.duration_secs || 0) % 60).padStart(2,'0')}s</span></summary>
+    <div class="body">
+      ${(e.strengths || []).length ? `<p><strong>Strengths:</strong> ${e.strengths.map(esc).join(' · ')}</p>` : ''}
+      <p class="muted mono">LLM ${fmt(c.latency?.llm_avg,'ms')} avg / ${fmt(c.latency?.llm_p90,'ms')} p90 · TTS ${fmt(c.latency?.tts_avg,'ms')} · ${c.latency?.slow_llm_turns ?? 0} slow turns</p>
+      <h3>Issues</h3>${issues}
+      ${tests ? `<h3 style="margin-top:14px">Test scenarios</h3>${tests}` : ''}
+      <button class="btn" style="margin-top:12px" data-transcript="${i}">View transcript</button>
+    </div></details>`;
+}
+function bindIssueToggles() {
+  document.querySelectorAll('[data-fix]').forEach(cb => cb.onchange = () => {
+    const key = cb.dataset.fix; const r = state.lastResult;
+    const iss = key.startsWith('r') ? r.recurring_issues[+key.slice(1)] : r.calls[+key.split('-')[0].slice(1)].evaluation.issues[+key.split('-')[1]];
+    cb.checked ? state.fixes.set(key, iss) : state.fixes.delete(key); renderFixes();
+  });
+}
+
+/* ───────────────────────── trends ───────────────────────── */
+let charts = {};
+$('#loadTrends').onclick = loadTrends;
+async function loadTrends() {
+  try {
+    const { scores, prompt_changes } = await api('scores', { agent_id: $('#trendAgent').value || undefined });
+    const byDay = {};
+    for (const r of scores) { const d = String(r.analyzed_at).slice(0, 10); (byDay[d] ??= []).push(r); }
+    const days = Object.keys(byDay).sort();
+    const mean = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : null;
+    const scoreSeries = days.map(d => mean(byDay[d].map(r => r.score).filter(Number.isFinite)));
+    const latSeries = days.map(d => mean(byDay[d].map(r => r.llm_avg_ms).filter(Number.isFinite)));
+    const changeDays = new Set((prompt_changes || []).map(c => String(c.changed_at).slice(0, 10)));
+    drawLine('scoreChart', days, scoreSeries, 'Avg score', days.map(d => changeDays.has(d) ? 7 : 3));
+    drawLine('latencyChart', days, latSeries, 'LLM TTFB ms');
+    $('#changes').textContent = changeDays.size ? `Larger points = prompt deployed that day (${[...changeDays].sort().join(', ')})` : '';
+    const rows = scores.slice(-40).reverse().map(r => `<tr><td class="mono">${esc(String(r.analyzed_at).slice(0,16).replace('T',' '))}</td><td>${esc(r.agent_name)}</td><td><span class="score ${scoreClass(r.score)}">${esc(r.score)}</span></td><td>${fmt(r.issues)}</td><td class="mono">${fmt(r.llm_avg_ms,' ms')}</td><td class="mono">${esc(r.conversation_id)}</td></tr>`).join('');
+    $('#trendTable').innerHTML = rows ? `<table><thead><tr><th>Reviewed</th><th>Agent</th><th>Score</th><th>Issues</th><th>LLM</th><th>Conversation</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No reviews yet.</div>';
+  } catch (e) { toast('Could not load trends: ' + e.message); }
+}
+function drawLine(id, labels, data, label, radius = 3) {
+  charts[id]?.destroy();
+  const css = getComputedStyle(document.documentElement);
+  charts[id] = new Chart(document.getElementById(id), { type: 'line',
+    data: { labels, datasets: [{ label, data, borderColor: css.getPropertyValue('--accent').trim(), backgroundColor: 'transparent', tension: .3, pointRadius: radius, spanGaps: true }] },
+    options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: css.getPropertyValue('--muted').trim() } }, y: { ticks: { color: css.getPropertyValue('--muted').trim() }, grid: { color: css.getPropertyValue('--line').trim() } } } } });
+}
+
+/* ───────────────────────── prompt lab ───────────────────────── */
+function renderFixes() {
+  const list = [...state.fixes.values()];
+  $('#fixCount').textContent = list.length ? `(${list.length})` : '';
+  $('#fixList').className = list.length ? '' : 'empty';
+  $('#fixList').innerHTML = list.length ? list.map(f => `<div class="issue"><span class="chip ${esc(f.severity)}">${esc(f.severity)}</span> ${esc(f.fix)}</div>`).join('') : 'Tick “Send to Prompt Lab” on issues in the Analyze tab.';
+}
+$('#loadPrompt').onclick = async () => {
+  try { const a = await api('get_agent', { agent_id: $('#labAgent').value }); $('#currentPrompt').value = a.prompt || ''; toast(`Loaded ${a.name}`); }
+  catch (e) { toast('Could not load prompt: ' + e.message); }
+};
+$('#rewrite').onclick = async () => {
+  const current = $('#currentPrompt').value.trim();
+  if (!current) return toast('Load or paste the current prompt first');
+  if (!state.fixes.size) return toast('Select at least one fix');
+  $('#rewrite').disabled = true; $('#rewriteProgress').classList.remove('hidden');
+  try {
+    const { job_id } = await api('rewrite_prompt', { current_prompt: current, issues: [...state.fixes.values()], language: 'en' });
+    const result = await pollJob(job_id);
+    state.proposed = result.updated_prompt || '';
+    renderDiff(current, state.proposed); $('#diffPanel').classList.remove('hidden');
+  } catch (e) { toast('Rewrite failed: ' + e.message); }
+  finally { $('#rewrite').disabled = false; $('#rewriteProgress').classList.add('hidden'); }
+};
+function renderDiff(a, b) {        // line-level LCS diff
+  const A = a.split('\n'), B = b.split('\n'), n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (A[i] === B[j]) { out.push(['', A[i]]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) out.push(['del', A[i++]]); else out.push(['add', B[j++]]); }
+  while (i < n) out.push(['del', A[i++]]); while (j < m) out.push(['add', B[j++]]);
+  $('#diff').innerHTML = out.map(([k, t]) => `<div class="${k}">${esc(t) || '&nbsp;'}</div>`).join('');
+}
+$('#copyPrompt').onclick = async () => { try { await navigator.clipboard.writeText(state.proposed); toast('Copied'); } catch { toast('Copy failed — select the text manually'); } };
+$('#markDeployed').onclick = async () => { try { await api('mark_prompt_deployed', { agent_id: $('#labAgent').value, note: `${state.fixes.size} fix(es) applied` }); toast('Logged — it will show on the Trends chart'); } catch (e) { toast(e.message); } };
+
+/* ───────────────────────── demo backend ───────────────────────── */
+const Demo = (() => {
+  const agents = [{ agent_id: 'agent_demo_reminder', name: 'Appointment Reminder · EN' }, { agent_id: 'agent_demo_docs', name: 'Missing Documents · EN' }];
+  const prompt = `# Personality\nYou are Maya, a friendly assistant calling on behalf of the onboarding team.\n\n# Goal\nHelp {{contact_name}} complete: {{action_items_list}}\n\n# Rules\n- Keep answers under two sentences.\n- Never promise approval timelines.\n- If the caller is busy, offer a callback.`;
+  const issue = (severity, category, root_cause, fix, patch, evidence) => ({ severity, category, root_cause, fix, prompt_patch: patch, evidence, setting_change: category === 'settings' ? { path: 'turn.turn_timeout', recommended: '5s' } : null });
+  const calls = Array.from({ length: 4 }, (_, i) => ({
+    conversation_id: `conv_demo_${1000 + i}`, agent_name: agents[1].name, duration_secs: 95 + i * 37,
+    latency: { llm_avg: 780 + i * 90, llm_p90: 1300 + i * 120, tts_avg: 210, asr_avg: 140, slow_llm_turns: i },
+    transcript: `[00:00] AGENT: Hi [NAME], it's Maya from the onboarding team — is now a good time?\n[00:04] CALLER: Yeah, quickly.\n[00:07] AGENT: You still need to upload your background check and your business registration.\n[00:15] CALLER: What's a business registration exactly?\n[00:18] AGENT: It's the document that shows you're registered to work independently…`,
+    evaluation: { overall: [86, 72, 64, 79][i], verdict: ['Clear, efficient call; goal met.', 'Goal met but agent over-explained.', 'Caller confused by jargon; no clear next step.', 'Good call, slightly slow responses.'][i],
+      scores: { goal_completion: [9, 8, 6, 8][i], flow: [9, 7, 6, 8][i], accuracy: [9, 8, 7, 8][i], tone: [8, 6, 6, 8][i], technical: [7, 7, 7, 6][i] },
+      strengths: ['Confirmed availability first', 'Listed items in order'],
+      issues: i === 0 ? [] : [issue(i === 2 ? 'major' : 'minor', 'prompt', 'Agent uses internal jargon without explaining it', 'Explain each required document in plain words the first time it is mentioned', 'When you mention a document for the first time, add one plain-language sentence explaining what it is and where to get it.', `at 00:1${i} — caller asked what a document meant`),
+        ...(i === 3 ? [issue('minor', 'settings', 'Dead air after long caller turns', 'Lower the turn timeout', null, 'at 00:42 — 3s of silence')] : [])],
+      test_scenarios: [{ goal: 'Caller unfamiliar with terms', caller_script: 'Ask "what does that mean?" after each document is named.', pass_criteria: ['Plain explanation given once', 'No repeated jargon'] }] },
+    cost_usd: 0.0112,
+  }));
+  const result = { summary: { calls_analyzed: 4, calls_failed: 0, average_score: 75.3, dimension_averages: { goal_completion: 7.8, flow: 7.5, accuracy: 8, tone: 7, technical: 6.8 }, latency_ms: { llm_avg: 915, tts_avg: 210 }, total_cost_usd: 0.0448 },
+    recurring_issues: [{ ...calls[2].evaluation.issues[0], occurrences: 3 }, { ...calls[3].evaluation.issues[1], occurrences: 1 }], calls };
+  const scores = Array.from({ length: 24 }, (_, i) => ({ analyzed_at: new Date(Date.now() - (23 - i) * 86400e3 / 2).toISOString(), agent_id: agents[i % 2].agent_id, agent_name: agents[i % 2].name,
+    conversation_id: `conv_demo_${2000 + i}`, score: Math.round(62 + i * 0.9 + (i % 3) * 3), llm_avg_ms: 1100 - i * 12, issues: 3 - (i % 3) }));
+  const jobs = {};
+  return { async handle(action, p) {
+    await sleep(250);
+    switch (action) {
+      case 'list_agents': return { agents };
+      case 'get_agent': return { agent_id: p.agent_id, name: agents.find(a => a.agent_id === p.agent_id)?.name, prompt };
+      case 'start_analysis': { const id = 'qa_demo_' + Date.now(); jobs[id] = { t: Date.now(), result }; return { job_id: id }; }
+      case 'rewrite_prompt': { const id = 'rw_demo_' + Date.now(); jobs[id] = { t: Date.now(), result: { updated_prompt: prompt.replace('- Never promise', '- When you name a document for the first time, explain in one plain sentence what it is and where to get it.\n- Never promise') } }; return { job_id: id }; }
+      case 'job_status': { const j = jobs[p.job_id]; return !j ? { status: 'unknown' } : Date.now() - j.t > 3000 ? { status: 'done', result: j.result } : { status: 'pending' }; }
+      case 'scores': return { scores: p.agent_id ? scores.filter(s => s.agent_id === p.agent_id) : scores, prompt_changes: [{ changed_at: scores[14].analyzed_at, agent_id: agents[0].agent_id }] };
+      default: return { ok: true };
+    }
+  } };
+})();
+
+renderMode(); loadAgents();
+</script>
+</body>
+</html>

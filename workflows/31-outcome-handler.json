@@ -1,0 +1,279 @@
+{
+  "name": "VoiceOps · 31 · Outcome Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ✅ Outcome handler (one for all campaigns)\nNormalize outcome → (booking campaigns) book the slot, **verified by HTTP 201** → one CRM activity per call attempt, with summary + recording link.\n\nA booking the agent \"made\" but the calendar refused is recorded as `Booking failed` — never as a success.",
+        "width": 460,
+        "height": 220,
+        "color": 7
+      },
+      "id": "f56a6f0e-b7d6-535b-afda-6099dfae763e",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -340
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c11b15ac-aa46-5697-9559-70f52743b3ed",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsConfig000000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "28c0d458-343e-54bd-8cc9-2305430a871d",
+      "name": "Load config",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map the agent's structured data collection onto a small canonical outcome vocabulary.\nconst cfg = $('Load config').first().json;\nconst { event, campaign_key, run_name } = $('Start').first().json;\nconst c = cfg.campaigns[campaign_key];\nconst keys = { ...cfg.defaults.outcome_keys, ...(c.outcome_keys ?? {}) };\nconst aliases = { ...cfg.defaults.outcome_aliases, ...(c.outcome_aliases ?? {}) };\nconst d = event.data ?? {};\nconst dc = d.analysis?.data_collection_results ?? {};\nconst dv = d.conversation_initiation_client_data?.dynamic_variables ?? {};\nconst val = k => dc[k]?.value ?? null;\nconst why = k => dc[k]?.rationale ?? '';\n\nif (!dv.contact_id) throw new Error(`Conversation ${d.conversation_id} has no contact_id — cannot reconcile to CRM`);\n\nlet raw = String(val(keys.outcome) ?? '').trim().toLowerCase().replace(/[\\s-]+/g, '_');\nif (!raw) raw = /voicemail/i.test(d.metadata?.termination_reason ?? '') ? 'voicemail' : 'failed';\nconst outcome = aliases[raw] ?? raw;\n\nreturn [{ json: {\n  campaign_key, run_name, campaign: c,\n  contact: { id: dv.contact_id, name: dv.contact_name, email: dv.contact_email, phone: dv.contact_phone },\n  outcome,\n  requested_slot: val(keys.scheduled_datetime),\n  reasons: { outcome: why(keys.outcome), refusal: why(keys.refusal_reason) },\n  conversation_id: d.conversation_id,\n  started_at: d.metadata?.start_time_unix_secs\n    ? DateTime.fromSeconds(d.metadata.start_time_unix_secs).toUTC().toISO({ suppressMilliseconds: true })\n    : DateTime.now().toUTC().toISO({ suppressMilliseconds: true }),\n  duration_secs: d.metadata?.call_duration_secs ?? 0,\n  wants_booking: outcome === 'booked' && c.booking?.enabled === true,\n} }];\n"
+      },
+      "id": "fb4f18b3-9132-5605-862f-9994cf5a4323",
+      "name": "Normalize outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "dataToSave": {
+          "values": [
+            {
+              "key": "contact_id",
+              "value": "={{ $json.contact.id }}"
+            },
+            {
+              "key": "outcome",
+              "value": "={{ $json.outcome }}"
+            }
+          ]
+        }
+      },
+      "id": "cd68c9c1-1904-5179-b288-5a165e558d34",
+      "name": "Tag execution",
+      "type": "n8n-nodes-base.executionData",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const n = $input.first().json;\nif (!n.wants_booking) return [{ json: { op: 'noop' } }];\n// The agent says a local wall-clock time; convert it in the campaign's timezone.\nconst start = DateTime.fromISO(String(n.requested_slot ?? ''), { zone: n.campaign.timezone });\nif (!start.isValid) return [{ json: { op: 'noop', invalid_slot: true } }];\nreturn [{ json: {\n  op: 'book',\n  event_type_uri: n.campaign.booking.event_type_uri,\n  start_time: start.toUTC().toISO({ suppressMilliseconds: true }),\n  invitee: { name: n.contact.name, email: n.contact.email, phone: n.contact.phone, timezone: n.campaign.timezone },\n  tracking: { campaign: n.campaign_key },\n} }];\n"
+      },
+      "id": "58c9fa40-1a86-51a0-99e0-7bbc28e53c87",
+      "name": "Calendar request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCalendar0000"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "dc11240f-e88a-55eb-9387-a76198e9f67b",
+      "name": "Book if needed",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Load config').first().json;\nconst n = $('Normalize outcome').first().json;\nconst req = $('Calendar request').first().json;\nconst cal = $input.first().json;\nconst labels = { ...cfg.defaults.outcome_labels, ...(n.campaign.outcome_labels ?? {}) };\n\nlet outcome = n.outcome;\nlet summary;\nif (n.wants_booking) {\n  outcome = cal.ok ? 'booked' : 'booking_failed';\n  summary = cal.ok\n    ? `Booked for ${n.requested_slot} (${n.campaign.timezone})`\n    : req.invalid_slot\n      ? `Agent recorded a booking but the slot \"${n.requested_slot}\" is not a valid date-time`\n      : `Agent agreed ${n.requested_slot} but the calendar rejected it: ${cal.error}`;\n} else if (outcome === 'refused') {\n  summary = n.reasons.refusal || n.reasons.outcome;\n} else {\n  summary = [n.reasons.outcome, n.reasons.refusal].filter(Boolean).join('\\n\\n');\n}\nconst label = labels[outcome] ?? outcome.replace(/_/g, ' ').replace(/^./, s => s.toUpperCase());\nconst recording = cfg.voice.conversation_url_template.replace('{conversation_id}', n.conversation_id);\n\nreturn [{ json: { op: 'log_activity', payload: {\n  contact_id: n.contact.id, campaign_key: n.campaign_key, run_name: n.run_name,\n  outcome_label: label, summary, started_at: n.started_at, duration_secs: n.duration_secs,\n  conversation_id: n.conversation_id,\n  note: `AI call outcome: ${label}\\n\\nSummary: ${summary || '—'}\\n\\nRecording: ${recording}`,\n} } }];\n"
+      },
+      "id": "3f453111-43ca-5ae1-a933-65d214b8da4e",
+      "name": "Finalize outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "vopsCrmAdapter00"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "eba0d7a3-cc08-5ea7-aa9c-96748ee88fc3",
+      "name": "Log activity in CRM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nif (!r.ok) throw new Error(`CRM write failed (${r.status_code}): ${r.error}`);   // → error notifier\nreturn [{ json: { logged: true, activity_id: r.id } }];\n"
+      },
+      "id": "b79a6912-ed44-5afe-9f87-69d8248bfb7b",
+      "name": "Assert written",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Load config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load config": {
+      "main": [
+        [
+          {
+            "node": "Normalize outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize outcome": {
+      "main": [
+        [
+          {
+            "node": "Tag execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag execution": {
+      "main": [
+        [
+          {
+            "node": "Calendar request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar request": {
+      "main": [
+        [
+          {
+            "node": "Book if needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book if needed": {
+      "main": [
+        [
+          {
+            "node": "Finalize outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize outcome": {
+      "main": [
+        [
+          {
+            "node": "Log activity in CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log activity in CRM": {
+      "main": [
+        [
+          {
+            "node": "Assert written",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "vopsErrorNotify0"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "vopsOutcome00000",
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
