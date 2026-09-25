@@ -103,6 +103,17 @@ You don't have to take all of it. Most people start with one piece:
 
 `00-config` is always needed: every workflow loads its settings from there.
 
+## 📏 Measuring impact
+
+A voice agent is only worth keeping if you can show what changed because of it. The numbers below are what the system records. It doesn't come with results of its own; those depend on your campaigns.
+
+- **Did the call make a difference at all?** Each campaign can hold back a control group. People are split with a stable hash, so the same person always lands in the same group, and the group is written onto their CRM record. Comparing the called group with the held-back group is then a normal CRM report, and it's the honest answer to "would they have come back anyway?"
+- **Did the outcome actually happen?** A booking only counts when the calendar API confirms it. The nightly KPI job can then check the CRM to see whether the booked appointment was attended (the *realization rate*). "Booked" and "showed up" are different numbers, and customers care about the second one.
+- **Nobody drops out of the count.** Calls that never send a webhook are found by the sweeper and logged as `Failed`, so connect and success rates aren't flattered by missing data.
+- **Daily, per campaign:** calls made, first attempts vs retries, connect rate, success rate, and the full breakdown of outcomes.
+- **Is the agent getting better?** Every reviewed call gets a weighted score. The console charts scores over time and marks the day each prompt change went live, so you can see whether a fix moved anything.
+- **What does quality review cost?** Fill in your model's token prices and each review shows its cost, per call and per batch.
+
 ## Quick start
 
 ```bash
