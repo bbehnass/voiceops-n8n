@@ -2,7 +2,7 @@
 
 ## 1. Requirements
 - n8n 1.x (self-hosted or cloud). Code nodes use Luxon (`DateTime`), available by default.
-- A voice platform account with batch calling + post-call webhooks (ElevenLabs Conversational AI).
+- A voice platform account with batch calling + post-call webhooks (ElevenLabs ElevenAgents).
 - A CRM (Zoho / HubSpot / your REST API), a Calendly account for booking campaigns, an Anthropic API key and a Google Sheet for the QA loop.
 
 ## 2. Import

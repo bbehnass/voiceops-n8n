@@ -1,6 +1,6 @@
 # Voice agent contract
 
-What an agent must accept and return for the pipeline to work. Written for ElevenLabs Conversational AI; any platform with batch calling, dynamic variables, structured post-call extraction and signed webhooks can implement it.
+What an agent must accept and return for the pipeline to work. Written for ElevenLabs ElevenAgents; any platform with batch calling, dynamic variables, structured post-call extraction and signed webhooks can implement it.
 
 ## Dynamic variables sent with every call
 

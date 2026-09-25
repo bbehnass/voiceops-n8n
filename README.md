@@ -6,7 +6,7 @@ A set of 13 importable [n8n](https://n8n.io) workflows plus a single-file QA con
 
 > CRM decides who to call → calls go out in batches → every call outcome lands back in the CRM → nobody silently falls through the cracks → retries happen automatically → KPIs are computed nightly → an LLM reviews real calls and proposes prompt fixes → you ship the fix and watch the score move.
 
-It is built around [ElevenLabs Conversational AI](https://elevenlabs.io/conversational-ai) (batch calling + post-call webhooks), Calendly (booking), and Anthropic's Messages API (QA review), with a **pluggable CRM adapter** that ships with Zoho CRM and HubSpot mappings.
+It is built around [ElevenLabs ElevenAgents](https://elevenlabs.io/conversational-ai) (batch calling + post-call webhooks), Calendly (booking), and Anthropic's Messages API (QA review), with a **pluggable CRM adapter** that ships with Zoho CRM and HubSpot mappings.
 
 ![status](https://img.shields.io/badge/n8n-1.x-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
 
