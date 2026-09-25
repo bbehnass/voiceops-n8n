@@ -1,5 +1,5 @@
 {
-  "campaign_key": "no_show_recovery",
+  "campaign_key": "missed_appointment",
   "recipients": [
     { "id": "100000000000001", "name": "Test Person", "phone_number": "+447700900000", "email": "test@example.com" }
   ]

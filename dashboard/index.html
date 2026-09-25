@@ -139,7 +139,7 @@ dialog .db{padding:18px;max-height:70vh;overflow:auto}
     </div>
     <div class="panel hidden" id="diffPanel" style="margin-top:14px">
       <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Proposed prompt</h2>
-        <div style="flex:0;display:flex;gap:8px"><button class="btn" id="copyPrompt">Copy</button><button class="btn" id="markDeployed">Mark as deployed</button></div></div>
+        <div style="flex:0 0 auto;min-width:0;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="copyPrompt">Copy</button><button class="btn" id="markDeployed">Mark as deployed</button></div></div>
       <p class="muted">Green = added, red = removed. Review before pasting into your agent — the model is instructed to apply only the selected fixes.</p>
       <div class="diff" id="diff"></div>
     </div>
@@ -389,13 +389,13 @@ $('#markDeployed').onclick = async () => { try { await api('mark_prompt_deployed
 
 /* ───────────────────────── demo backend ───────────────────────── */
 const Demo = (() => {
-  const agents = [{ agent_id: 'agent_demo_reminder', name: 'Appointment Reminder · EN' }, { agent_id: 'agent_demo_docs', name: 'Missing Documents · EN' }];
-  const prompt = `# Personality\nYou are Maya, a friendly assistant calling on behalf of the onboarding team.\n\n# Goal\nHelp {{contact_name}} complete: {{action_items_list}}\n\n# Rules\n- Keep answers under two sentences.\n- Never promise approval timelines.\n- If the caller is busy, offer a callback.`;
+  const agents = [{ agent_id: 'agent_demo_reminder', name: 'Appointment Reminder · EN' }, { agent_id: 'agent_demo_rental', name: 'Rental Documents · EN' }];
+  const prompt = `# Personality\nYou are Maya, a friendly assistant calling on behalf of the lettings team.\n\n# Goal\nHelp {{contact_name}} complete: {{action_items_list}}\n\n# Rules\n- Keep answers under two sentences.\n- Never promise approval timelines.\n- If the caller is busy, offer a callback.`;
   const issue = (severity, category, root_cause, fix, patch, evidence) => ({ severity, category, root_cause, fix, prompt_patch: patch, evidence, setting_change: category === 'settings' ? { path: 'turn.turn_timeout', recommended: '5s' } : null });
   const calls = Array.from({ length: 4 }, (_, i) => ({
     conversation_id: `conv_demo_${1000 + i}`, agent_name: agents[1].name, duration_secs: 95 + i * 37,
     latency: { llm_avg: 780 + i * 90, llm_p90: 1300 + i * 120, tts_avg: 210, asr_avg: 140, slow_llm_turns: i },
-    transcript: `[00:00] AGENT: Hi [NAME], it's Maya from the onboarding team — is now a good time?\n[00:04] CALLER: Yeah, quickly.\n[00:07] AGENT: You still need to upload your background check and your business registration.\n[00:15] CALLER: What's a business registration exactly?\n[00:18] AGENT: It's the document that shows you're registered to work independently…`,
+    transcript: `[00:00] AGENT: Hi [NAME], it's Maya from the lettings team — is now a good time?\n[00:04] CALLER: Yeah, quickly.\n[00:07] AGENT: You still need to send your proof of income and the guarantor form.\n[00:15] CALLER: What's a guarantor form exactly?\n[00:18] AGENT: It's a form signed by someone who agrees to cover the rent if you can't…`,
     evaluation: { overall: [86, 72, 64, 79][i], verdict: ['Clear, efficient call; goal met.', 'Goal met but agent over-explained.', 'Caller confused by jargon; no clear next step.', 'Good call, slightly slow responses.'][i],
       scores: { goal_completion: [9, 8, 6, 8][i], flow: [9, 7, 6, 8][i], accuracy: [9, 8, 7, 8][i], tone: [8, 6, 6, 8][i], technical: [7, 7, 7, 6][i] },
       strengths: ['Confirmed availability first', 'Listed items in order'],

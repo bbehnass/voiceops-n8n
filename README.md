@@ -10,6 +10,10 @@ It is built around [ElevenLabs Conversational AI](https://elevenlabs.io/conversa
 
 ![status](https://img.shields.io/badge/n8n-1.x-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
 
+![QA console, demo mode](docs/img/qa-console.png)
+
+**▶️ [Try the QA console live](https://bbehnass.github.io/voiceops-n8n/dashboard/)**: it runs in demo mode on made-up calls, so there's nothing to install and no account needed.
+
 ---
 
 ## Why this exists
@@ -85,6 +89,19 @@ Full walkthrough: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | — | [QA Console](dashboard/index.html) | Analyze · Trends · Prompt Lab (runs in **demo mode** with no backend) |
 
 Node-by-node documentation: [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+
+## 🧩 Pick what you need
+
+You don't have to take all of it. Most people start with one piece:
+
+| I want to… | Import these | Accounts you need |
+|---|---|---|
+| **Score my agent's calls and get prompt fixes** | `00`, `60`, `61` + `dashboard/` | ElevenLabs, Anthropic, a Google Sheet |
+| **Receive post-call webhooks safely and log outcomes to my CRM** | `00`, `10`, `11`, `30`, `31`, `90` | ElevenLabs, your CRM (Calendly only if you book) |
+| **Run full outbound campaigns** | everything | all of the above |
+| **Just borrow a pattern** | read `10` (CRM adapter), `30` (signed webhooks) or `40` (silent-failure sweeper), plus [`docs/ENGINEERING_NOTES.md`](docs/ENGINEERING_NOTES.md) | none |
+
+`00-config` is always needed: every workflow loads its settings from there.
 
 ## Quick start
 

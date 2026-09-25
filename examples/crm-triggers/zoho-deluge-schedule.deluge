@@ -3,7 +3,7 @@
 // the "is it still true right now?" check lives in the dispatcher's eligibility rules.
 url = "https://<your-n8n>/webhook/voiceops/campaigns/dispatch";
 yesterday = zoho.currentdate.subDay(1).toString("yyyy-MM-dd");
-rows = zoho.crm.searchRecords("Contacts", "((Session_Status:equals:No show)and(Session_Date:equals:" + yesterday + "))");
+rows = zoho.crm.searchRecords("Contacts", "((Appointment_Status:equals:Missed)and(Appointment_Date:equals:" + yesterday + "))");
 recipients = List();
 for each r in rows
 {
@@ -14,7 +14,7 @@ for each r in rows
 }
 if(recipients.size() > 0)
 {
-    payload = {"campaign_key":"no_show_recovery","recipients":recipients};
+    payload = {"campaign_key":"missed_appointment","recipients":recipients};
     resp = invokeurl [ url: url type: POST parameters: payload.toString()
                        headers: {"Content-Type":"application/json","X-Webhook-Token":"<from a Zoho connection or org variable>"} ];
     info resp;

@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 📊 KPI aggregator\nDaily, for every campaign with `kpi.enabled`: calls, first attempts vs retries, connect rate, success rate, and (optional) **realization** — did the booked session actually happen?\nPosts one JSON row per campaign/day to any ingest endpoint (dashboard, warehouse, sheet).",
+        "content": "## 📊 KPI aggregator\nDaily, for every campaign with `kpi.enabled`: calls, first attempts vs retries, connect rate, success rate, and (optional) **realization** — did the booked appointment actually happen?\nPosts one JSON row per campaign/day to any ingest endpoint (dashboard, warehouse, sheet).",
         "width": 460,
         "height": 220,
         "color": 7

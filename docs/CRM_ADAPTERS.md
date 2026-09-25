@@ -53,7 +53,7 @@ The dispatcher accepts:
 ```json
 POST /webhook/voiceops/campaigns/dispatch
 Header: X-Webhook-Token: <shared secret>
-{ "campaign_key": "no_show_recovery",
+{ "campaign_key": "missed_appointment",
   "recipients": [ { "id": "123", "name": "Alex Doe", "phone_number": "07700 900123", "email": "a@example.com" } ] }
 ```
 Use `/campaigns/cascade` for multi-touch campaigns. Examples for Zoho (Deluge schedule), HubSpot (workflow webhook) and plain cron + SQL are in [`../examples/crm-triggers/`](../examples/crm-triggers/).

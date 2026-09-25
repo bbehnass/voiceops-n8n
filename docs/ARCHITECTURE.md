@@ -56,7 +56,7 @@ sequenceDiagram
 
 **Activity** (what the adapter returns from `search_activities`)
 ```json
-{ "id": "activity-id", "contact_id": "crm-record-id", "run_name": "No Show Recovery 2026-09-25 (Retry 1)",
+{ "id": "activity-id", "contact_id": "crm-record-id", "run_name": "Missed Appointment 2026-09-25 (Retry 1)",
   "outcome": "Voicemail", "started_at": "2026-09-25T10:04:00Z" }
 ```
 

@@ -15,8 +15,8 @@ Key sections: `crm`, `voice`, `webhooks`, `safety_net`, `alerts`, `kpi`, `qa`, `
 
 A campaign:
 ```js
-missing_documents: {
-  label: 'Missing Documents',          // run-name prefix
+rental_documents: {
+  label: 'Rental Documents',           // run-name prefix
   agent_id, timezone, locale, default_country_code,
   booking:     { enabled, event_type_uri, lookahead_days, max_slots_offered },
   ab_test:     { enabled, treatment_pct, salt, crm_field, multi_select, labels },
@@ -90,7 +90,7 @@ Nightly + manual. One adapter search per KPI-enabled campaign (mode *each*), the
 
 Row:
 ```json
-{ "campaign_key":"no_show_recovery","date":"2026-09-24","total":3,"first_attempts":2,"retries":1,
+{ "campaign_key":"missed_appointment","date":"2026-09-24","total":3,"first_attempts":2,"retries":1,
   "connected":2,"successes":1,"realized":1,"connect_rate_pct":66.7,"success_rate_pct":50,
   "realization_rate_pct":100,"outcomes":{"booked":1,"voicemail":1,"refused":1} }
 ```

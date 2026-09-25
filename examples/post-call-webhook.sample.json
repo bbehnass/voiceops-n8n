@@ -6,7 +6,7 @@
     "conversation_id": "conv_example_0001",
     "status": "done",
     "transcript": [
-      { "role": "agent", "message": "Hi Test, it's Maya calling about the session you missed. Is now a good time?", "time_in_call_secs": 0 },
+      { "role": "agent", "message": "Hi Test, it's Maya calling about the appointment you missed. Is now a good time?", "time_in_call_secs": 0 },
       { "role": "user", "message": "Yes, sorry about that.", "time_in_call_secs": 5 },
       { "role": "agent", "message": "No problem. I can offer Monday at 14:00 or Tuesday at 09:30.", "time_in_call_secs": 8 },
       { "role": "user", "message": "Monday works.", "time_in_call_secs": 14 }
@@ -26,8 +26,8 @@
     },
     "conversation_initiation_client_data": {
       "dynamic_variables": {
-        "campaign_key": "no_show_recovery",
-        "run_name": "No Show Recovery 2026-09-25",
+        "campaign_key": "missed_appointment",
+        "run_name": "Missed Appointment 2026-09-25",
         "contact_id": "100000000000001",
         "contact_name": "Test Person",
         "contact_email": "test@example.com",

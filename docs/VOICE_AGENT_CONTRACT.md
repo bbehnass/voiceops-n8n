@@ -10,7 +10,7 @@ What an agent must accept and return for the pipeline to work. Written for Eleve
 | `contact_email`, `contact_phone` | | Confirmation / booking |
 | `today`, `tomorrow` | `Friday 25 September 2026` | Resolving "tomorrow at 3" |
 | `next_availabilities` | `Monday 28 September at 14:00, …` | Booking campaigns — **offer only these** |
-| `action_item_count`, `action_items_list` | `2` / `1. Background check\n2. Profile photo` | Checklist campaigns (fresh at dial time) |
+| `action_item_count`, `action_items_list` | `2` / `1. Proof of income\n2. Guarantor form` | Checklist campaigns (fresh at dial time) |
 | `campaign_key`, `run_name`, `contact_id` | | Not for the agent — used for routing and reconciliation. Don't mention them. |
 | anything in `recipient.variables` | | Your own extras |
 
